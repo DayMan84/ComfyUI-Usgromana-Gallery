@@ -1,0 +1,14 @@
+    const leftSection = document.createElement("div");
+    Object.assign(leftSection.style, {
+        display: "flex",
+        alignItems: "center",
+    });
+
+    const imageIcon = document.createElement('img');
+    imageIcon.src = new URL("../assets/dark_logo.ico", import.meta.url).href;
+    imageIcon.alt = "Gallery Logo";
+    Object.assign(imageIcon.style, {
+        height: "10px",
+        width: "auto",
+        marginRight: "8px",
+    });

@@ -1,0 +1,55 @@
+{
+	"Extension Name": "ComfyUI-Usgromana-Gallery",
+	"folders": [
+		{
+			"path": ".",
+				"__init__.py": ".",
+				"server.py": "."
+		},
+		{
+			"path": "backend",
+				"__init__.py": ".",
+				"files.py": ".",
+				"routes.py": "."
+		},
+		{
+			"path": "web",
+				"index.js": ",",
+				"usgromana_gallery.py": ",",
+				"core": {
+					"entry.js": ".",
+					"gallery.css": ".",
+					"gallery.js": ".",
+					"images.js": ".",
+					"modal.js": ".",
+					"utils.js": "."
+				},
+				"css": {
+					"details.css": ",",
+					"folder_panels.css": ".",
+					"grid.css": ",",
+					"overlay.css": ".",
+				},
+				"data": {
+					"folders.js": ",",
+					"search.js": ",",
+					"tags.js": ",",
+					"workflow.js": ","
+				},
+				"js": {
+					"event.js": ",",
+					"gallery_api.js": ".",
+					"gallery_api.js": ".",
+					"usgromana_gallery.js": "."
+				},
+				"ui": {
+					"details.js": ".",
+					"floating_bar.js": ".",
+					"folder_panel.js": ".",
+					"grid.js": ".",
+					"overlay.js": ".",
+					"toolbar.js": "."
+				}
+		}
+	],
+}
