@@ -791,6 +791,78 @@ async function fillMetadata(imgInfo, historyKey) {
     };
     editBox.appendChild(tagsInput);
 
+    // NSFW Mark Button (only if user can edit)
+    if (canEditMeta) {
+        const nsfwButtonRow = document.createElement("div");
+        Object.assign(nsfwButtonRow.style, {
+            display: "flex",
+            gap: "8px",
+            marginTop: "8px",
+            alignItems: "center",
+        });
+
+        const nsfwButton = document.createElement("button");
+        nsfwButton.textContent = "Mark as NSFW";
+        Object.assign(nsfwButton.style, {
+            padding: "6px 12px",
+            borderRadius: "8px",
+            border: "1px solid rgba(220,38,38,0.6)",
+            background: "rgba(220,38,38,0.2)",
+            color: "#fca5a5",
+            cursor: "pointer",
+            fontSize: "12px",
+            fontWeight: "500",
+            outline: "none",
+            transition: "all 0.2s ease",
+        });
+
+        nsfwButton.onmouseenter = () => {
+            nsfwButton.style.background = "rgba(220,38,38,0.35)";
+            nsfwButton.style.borderColor = "rgba(220,38,38,0.8)";
+        };
+        nsfwButton.onmouseleave = () => {
+            nsfwButton.style.background = "rgba(220,38,38,0.2)";
+            nsfwButton.style.borderColor = "rgba(220,38,38,0.6)";
+        };
+
+        nsfwButton.onclick = async () => {
+            if (!currentImageInfo || !currentImageInfo.filename) return;
+            
+            if (!confirm("Mark this image as NSFW? This will prevent unauthorized users from viewing it.")) {
+                return;
+            }
+
+            try {
+                nsfwButton.disabled = true;
+                nsfwButton.textContent = "Marking...";
+                await galleryApi.markAsNSFW(currentImageInfo.filename);
+                nsfwButton.textContent = "Marked as NSFW ✓";
+                nsfwButton.style.background = "rgba(34,197,94,0.2)";
+                nsfwButton.style.borderColor = "rgba(34,197,94,0.6)";
+                nsfwButton.style.color = "#86efac";
+                
+                // Clear cache so the image gets re-filtered
+                metaCache.delete(currentImageInfo.filename);
+                
+                setTimeout(() => {
+                    nsfwButton.textContent = "Mark as NSFW";
+                    nsfwButton.style.background = "rgba(220,38,38,0.2)";
+                    nsfwButton.style.borderColor = "rgba(220,38,38,0.6)";
+                    nsfwButton.style.color = "#fca5a5";
+                    nsfwButton.disabled = false;
+                }, 2000);
+            } catch (err) {
+                console.error("[UsgromanaGallery] Failed to mark image as NSFW:", err);
+                alert("Failed to mark image as NSFW: " + (err.message || "Unknown error"));
+                nsfwButton.textContent = "Mark as NSFW";
+                nsfwButton.disabled = false;
+            }
+        };
+
+        nsfwButtonRow.appendChild(nsfwButton);
+        editBox.appendChild(nsfwButtonRow);
+    }
+
     metaContent.appendChild(editBox);
 
     // History strip (thumbs ONLY from state registry; never generates)

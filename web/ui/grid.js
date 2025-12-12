@@ -23,6 +23,7 @@ import { debounce, unloadImage } from "../core/utils.js";
 
 let rootEl = null;
 let gridContentEl = null;
+let loadingIndicatorEl = null;
 
 let lastState = null;
 let ratingMap = new Map();
@@ -133,6 +134,7 @@ export function clearGridThumbnails() {
  */
 export async function reloadImagesAndRender() {
     clearGridThumbnails();
+    showLoadingIndicator();
 
     try {
         const images = await galleryApi.listImages();
@@ -145,6 +147,8 @@ export async function reloadImagesAndRender() {
         console.warn("[USG-Gallery] Failed to reload images:", err);
         // fallback: at least render whatever state we already had
         renderGridContent();
+    } finally {
+        hideLoadingIndicator();
     }
 }
 
@@ -337,9 +341,13 @@ export function initGrid(root) {
     // Reset the flag to allow initial load - always reset on initGrid
     resetGridHasSetVisibleImagesFlag();
     
+    // Expose loading functions to window for entry.js to use
     if (typeof window !== 'undefined') {
         window.__USG_GALLERY_GRID_INIT__ = true;
+        window.USG_GALLERY_SHOW_LOADING = showLoadingIndicator;
+        window.USG_GALLERY_HIDE_LOADING = hideLoadingIndicator;
     }
+    
     reloadImagesAndRender();
 
     unsubscribeSettings = subscribeGallerySettings((s) => {
@@ -530,12 +538,16 @@ function buildStaticUI() {
     scrollContainer.classList.add("usg-gallery-scroll");
     Object.assign(scrollContainer.style, {
         flex: "1", overflowY: "auto", width: "100%", paddingRight: "5px",
+        position: "relative", // Needed for loading indicator positioning
     });
 
     gridContentEl = document.createElement("div");
     gridContentEl.className = "usg-gallery-grid";
     scrollContainer.appendChild(gridContentEl);
     rootEl.appendChild(scrollContainer);
+
+    // Create loading indicator
+    createLoadingIndicator();
 
     updateFilterButtons();
     updateBatchButtons();
@@ -563,6 +575,111 @@ function updateFilterButtons() {
     });
 }
 
+// ---------------------------------------------------------------------
+// Loading indicator
+// ---------------------------------------------------------------------
+
+function createLoadingIndicator() {
+    if (loadingIndicatorEl) return;
+    
+    loadingIndicatorEl = document.createElement("div");
+    loadingIndicatorEl.className = "usg-gallery-loading";
+    loadingIndicatorEl.style.display = "none";
+    
+    Object.assign(loadingIndicatorEl.style, {
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "16px",
+        zIndex: "1000",
+        pointerEvents: "none",
+    });
+    
+    // Message
+    const messageEl = document.createElement("div");
+    messageEl.textContent = "Processing images...";
+    Object.assign(messageEl.style, {
+        fontSize: "14px",
+        color: "#e5e7eb",
+        fontWeight: "500",
+        textAlign: "center",
+    });
+    
+    // Progress bar container
+    const progressContainer = document.createElement("div");
+    Object.assign(progressContainer.style, {
+        width: "300px",
+        height: "4px",
+        background: "rgba(148,163,184,0.2)",
+        borderRadius: "2px",
+        overflow: "hidden",
+        position: "relative",
+    });
+    
+    // Animated progress bar
+    const progressBar = document.createElement("div");
+    progressBar.className = "usg-gallery-progress-bar";
+    Object.assign(progressBar.style, {
+        height: "100%",
+        width: "30%",
+        background: "linear-gradient(90deg, rgba(56,189,248,0.8) 0%, rgba(147,51,234,0.8) 100%)",
+        borderRadius: "2px",
+        position: "absolute",
+        animation: "usg-progress-animation 1.5s ease-in-out infinite",
+    });
+    
+    progressContainer.appendChild(progressBar);
+    loadingIndicatorEl.appendChild(messageEl);
+    loadingIndicatorEl.appendChild(progressContainer);
+    
+    // Add animation styles
+    if (!document.getElementById("usg-gallery-loading-style")) {
+        const style = document.createElement("style");
+        style.id = "usg-gallery-loading-style";
+        style.textContent = `
+            @keyframes usg-progress-animation {
+                0% {
+                    left: -30%;
+                    width: 30%;
+                }
+                50% {
+                    left: 100%;
+                    width: 30%;
+                }
+                100% {
+                    left: 100%;
+                    width: 30%;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    // Insert into grid content area (needs to be positioned relative)
+    if (gridContentEl && gridContentEl.parentElement) {
+        gridContentEl.parentElement.style.position = "relative";
+        gridContentEl.parentElement.appendChild(loadingIndicatorEl);
+    }
+}
+
+function showLoadingIndicator() {
+    if (!loadingIndicatorEl) createLoadingIndicator();
+    if (loadingIndicatorEl) {
+        loadingIndicatorEl.style.display = "flex";
+    }
+}
+
+function hideLoadingIndicator() {
+    if (loadingIndicatorEl) {
+        loadingIndicatorEl.style.display = "none";
+    }
+}
+
 
 // ---------------------------------------------------------------------
 // Core render
@@ -570,6 +687,9 @@ function updateFilterButtons() {
 
 function renderGridContent() {
     if (!gridContentEl) return;
+
+    // Hide loading indicator when rendering starts (images are ready)
+    hideLoadingIndicator();
 
     gridContentEl.innerHTML = "";
     const allImages = getAllImagesRaw();

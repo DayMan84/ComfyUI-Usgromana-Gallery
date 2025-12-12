@@ -84,4 +84,11 @@ export const galleryApi = {
         if (!res.ok) throw new Error(`Download failed: ${res.status}`);
         return await res.blob();
     },
+
+    async markAsNSFW(filename) {
+        return await request("/mark-nsfw", {
+            method: "POST",
+            body: JSON.stringify({ filename }),
+        });
+    },
 };

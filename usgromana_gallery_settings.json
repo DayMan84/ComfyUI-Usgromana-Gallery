@@ -1,0 +1,19 @@
+{
+  "masonryLayout": false,
+  "enableDrag": false,
+  "theme": "dark",
+  "showRatingInGrid": false,
+  "thumbSize": "md",
+  "anchorToManagerBar": true,
+  "showDividers": true,
+  "dividerMode": "folder",
+  "dividerStyle": "pill",
+  "arrangeBy": "name",
+  "sortAscending": true,
+  "openButtonBoxQuery": ".actionbar-container .comfyui-button-group:nth-of-type(2)",
+  "fileExtensions": ".png,.jpg,.jpeg,.webp,.gif,.bmp",
+  "usePollingObserver": true,
+  "enableRealTimeUpdates": true,
+  "showNSFW": false,
+  "dividerLayout": "page"
+}

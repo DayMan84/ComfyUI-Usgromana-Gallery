@@ -31,6 +31,12 @@ async function loadImages(force = false) {
     if (loadedOnce && !force) return;
 
     loading = true;
+    
+    // Show loading indicator if grid is initialized
+    if (typeof window !== 'undefined' && window.USG_GALLERY_SHOW_LOADING) {
+        window.USG_GALLERY_SHOW_LOADING();
+    }
+    
     try {
         const images = await galleryApi.listImages();
         // Only reset visibleImages on initial load (force=true) or first load
@@ -41,6 +47,11 @@ async function loadImages(force = false) {
         logger.error("[UsgromanaGallery] Failed to load gallery images", err);
     } finally {
         loading = false;
+        
+        // Hide loading indicator
+        if (typeof window !== 'undefined' && window.USG_GALLERY_HIDE_LOADING) {
+            window.USG_GALLERY_HIDE_LOADING();
+        }
     }
 }
 
