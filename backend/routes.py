@@ -183,6 +183,8 @@ except Exception as e:
 if not _NSFW_API_AVAILABLE:
     def check_image_path_nsfw(*args, **kwargs):
         return False
+    check_image_path_nsfw_fast = None  # Fast check not available when API not available
+    check_pil_image_nsfw = None  # PIL check not available when API not available
     def get_current_user(*args, **kwargs):
         return None
     def set_user_context(*args, **kwargs):
@@ -191,11 +193,16 @@ if not _NSFW_API_AVAILABLE:
         return False
     should_block_image_for_current_user = None
     _get_nsfw_pipeline = None
+    set_image_nsfw_tag = None  # Fallback if API not available
 else:
-    # Initialize these to None, will be set if available
-    should_block_image_for_current_user = None
-    _get_nsfw_pipeline = None
-    set_image_nsfw_tag = None
+    # When API is available, these variables are already initialized and potentially set above:
+    # - check_image_path_nsfw_fast: set at line 92 (may be None if not available in API)
+    # - check_pil_image_nsfw: set at line 93 (may be None if not available in API)
+    # - _get_nsfw_pipeline: initialized at line 101, may be set at lines 107, 132, or 145
+    # - should_block_image_for_current_user: initialized at line 102, may be set at lines 133 or 146
+    # - set_image_nsfw_tag: set at line 98 (may be None if not available in API)
+    # Do NOT overwrite them here, as they may have been successfully loaded
+    pass
 
 # Use a unique prefix to avoid clashing with Usgromana RBAC
 USGROMANA_GALLERY = "/usgromana-gallery"
@@ -974,13 +981,42 @@ async def gallery_get_meta(request: web.Request) -> web.Response:
     """
     Get stored metadata for a single image.
     Query: ?filename=<name>
+    Also includes NSFW status if API is available.
     """
     filename = request.query.get("filename")
     if not filename:
         return _json({"ok": False, "error": "Missing filename"}, status=400)
 
     meta = _load_meta()
-    return _json({"ok": True, "meta": meta.get(filename, {})})
+    result_meta = meta.get(filename, {})
+    
+    # Add NSFW status if API is available
+    if _NSFW_API_AVAILABLE:
+        try:
+            safe_path = _safe_join_output(filename)
+            if safe_path:
+                username = _get_username_from_request(request)
+                current_user = get_current_user()
+                if username != current_user:
+                    if username:
+                        set_user_context(username)
+                    else:
+                        set_user_context(None)
+                
+                # Use fast check to get NSFW status (uses cached tags)
+                if check_image_path_nsfw_fast:
+                    is_nsfw = check_image_path_nsfw_fast(safe_path, username)
+                    if is_nsfw is not None:
+                        result_meta["is_nsfw"] = is_nsfw
+                else:
+                    # Fallback to regular check
+                    is_nsfw = check_image_path_nsfw(safe_path, username)
+                    result_meta["is_nsfw"] = is_nsfw
+        except Exception as e:
+            # If check fails, don't include NSFW status
+            print(f"[Usgromana-Gallery] Error checking NSFW status for metadata: {e}")
+    
+    return _json({"ok": True, "meta": result_meta})
 
 
 @PromptServer.instance.routes.post(f"{ROUTE_PREFIX}/meta")
@@ -1005,6 +1041,69 @@ async def gallery_set_meta(request: web.Request) -> web.Response:
     _save_meta(meta)
 
     return _json({"ok": True})
+
+
+@PromptServer.instance.routes.post(f"{ROUTE_PREFIX}/rename")
+async def gallery_rename_file(request: web.Request) -> web.Response:
+    """
+    Rename a file (admin only).
+    Body: { "old_filename": "...", "new_filename": "..." }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "Invalid JSON"}, status=400)
+    
+    old_filename = body.get("old_filename")
+    new_filename = body.get("new_filename")
+    
+    if not old_filename or not new_filename:
+        return _json({"ok": False, "error": "Missing old_filename or new_filename"}, status=400)
+    
+    # Sanitize new filename
+    import re
+    # Remove any path separators and dangerous characters
+    new_filename = os.path.basename(new_filename)
+    new_filename = re.sub(r'[<>:"|?*]', '', new_filename)
+    
+    if not new_filename:
+        return _json({"ok": False, "error": "Invalid filename"}, status=400)
+    
+    old_path = _safe_join_output(old_filename)
+    if old_path is None:
+        return _json({"ok": False, "error": "File not found or invalid path"}, status=404)
+    
+    # Get directory of old file
+    old_dir = os.path.dirname(old_path)
+    new_path = os.path.join(old_dir, new_filename)
+    
+    # Check if new file already exists
+    if os.path.exists(new_path):
+        return _json({"ok": False, "error": "File with that name already exists"}, status=409)
+    
+    try:
+        # Rename the file
+        os.rename(old_path, new_path)
+        
+        # Update metadata if it exists
+        meta = _load_meta()
+        if old_filename in meta:
+            meta[new_filename] = meta[old_filename]
+            del meta[old_filename]
+            _save_meta(meta)
+        
+        # Update ratings if they exist
+        ratings = _load_ratings()
+        if old_filename in ratings:
+            ratings[new_filename] = ratings[old_filename]
+            del ratings[old_filename]
+            _save_ratings(ratings)
+        
+        return _json({"ok": True, "message": "File renamed successfully"})
+    except OSError as e:
+        return _json({"ok": False, "error": f"Failed to rename file: {str(e)}"}, status=500)
+    except Exception as e:
+        return _json({"ok": False, "error": str(e)}, status=500)
 
 
 # --- Optional log endpoint ----------------------------------------

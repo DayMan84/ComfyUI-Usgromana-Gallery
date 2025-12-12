@@ -584,14 +584,13 @@ function createLoadingIndicator() {
     
     loadingIndicatorEl = document.createElement("div");
     loadingIndicatorEl.className = "usg-gallery-loading";
-    loadingIndicatorEl.style.display = "none";
     
     Object.assign(loadingIndicatorEl.style, {
         position: "absolute",
         top: "50%",
         left: "50%",
         transform: "translate(-50%, -50%)",
-        display: "flex",
+        display: "none", // Start hidden, will be shown by showLoadingIndicator()
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",

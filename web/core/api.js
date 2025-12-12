@@ -91,4 +91,11 @@ export const galleryApi = {
             body: JSON.stringify({ filename }),
         });
     },
+
+    async renameFile(oldFilename, newFilename) {
+        return await request("/rename", {
+            method: "POST",
+            body: JSON.stringify({ old_filename: oldFilename, new_filename: newFilename }),
+        });
+    },
 };
