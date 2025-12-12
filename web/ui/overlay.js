@@ -144,6 +144,9 @@ function ensureOverlay() {
     });
     
     closeButton.onclick = () => {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overlay.js:146',message:'Overlay closing - cleanup start',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
         // Hide overlay
         overlayEl.style.display = "none";
         // Close the floating filter panel
@@ -152,6 +155,9 @@ function ensureOverlay() {
         clearGridThumbnails();
         // Also close the big details overlay if it is open
         hideDetails();
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overlay.js:155',message:'Overlay closed - cleanup complete',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
     };
 
     rightHeader.appendChild(closeButton);

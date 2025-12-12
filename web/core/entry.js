@@ -146,9 +146,15 @@ function startAnchorWatch() {
     if (anchorWatchStarted) return;
     anchorWatchStarted = true;
 
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'entry.js:147',message:'Anchor watch started',data:{interval:1500},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     setInterval(() => {
         if (!launchBtn) return;
 
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'entry.js:150',message:'Anchor watch tick',data:{timestamp:Date.now()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         const cfg = getGallerySettings();
         const anchor = cfg.anchorToManagerBar;
         const toolbar = usgFindToolbarContainer(cfg);
@@ -156,12 +162,18 @@ function startAnchorWatch() {
         // If anchored, make sure we're inside the toolbar
         if (anchor && toolbar) {
             if (!toolbar.contains(launchBtn)) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'entry.js:159',message:'Button re-anchored to toolbar',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+                // #endregion
                 toolbar.appendChild(launchBtn);
                 applyButtonPosition(cfg);
             }
         } else {
             // Not anchored → make sure we're back on the body (floating)
             if (launchBtn.parentElement !== document.body) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'entry.js:165',message:'Button moved to body',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+                // #endregion
                 document.body.appendChild(launchBtn);
                 applyButtonPosition(cfg);
             }
@@ -169,6 +181,9 @@ function startAnchorWatch() {
 
         // Safety: if somehow removed entirely from DOM, re-attach
         if (!document.body.contains(launchBtn)) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'entry.js:172',message:'Button re-attached to DOM',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
             document.body.appendChild(launchBtn);
             applyButtonPosition(cfg);
         }

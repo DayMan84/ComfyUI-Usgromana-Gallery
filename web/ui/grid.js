@@ -368,6 +368,9 @@ function buildStaticUI() {
     searchInput.addEventListener("blur", () => { window.__USG_GALLERY_CAPTURE__ = false; });
     ["keydown","keyup","keypress"].forEach(evt => searchInput.addEventListener(evt, ev => ev.stopPropagation()));
     searchInput.addEventListener("input", () => {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:370',message:'Search input changed',data:{query:searchInput.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         searchQuery = searchInput.value || "";
         renderGridContent();
     });
@@ -488,8 +491,15 @@ function updateFilterToggleVisual() {
 function renderGridContent() {
     if (!gridContentEl) return;
 
+    // #region agent log
+    const renderStart = Date.now();
+    fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:488',message:'renderGridContent start',data:{timestamp:renderStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     gridContentEl.innerHTML = "";
     const allImages = getAllImagesRaw();
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:492',message:'Images loaded for render',data:{count:allImages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
 
     let filtered = allImages.filter((img) => {
         const rating = getRatingForImage(img);
@@ -525,6 +535,10 @@ function renderGridContent() {
             color: "#aaa", fontSize: "14px", textAlign: "center", marginTop: "40px", width: "100%",
         });
         gridContentEl.appendChild(empty);
+        // #region agent log
+        const renderDuration = Date.now() - renderStart;
+        fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:528',message:'renderGridContent complete (empty)',data:{duration_ms:renderDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
         return;
     }
 
@@ -617,6 +631,10 @@ function renderGridContent() {
             });
         });
     }
+    // #region agent log
+    const renderDuration = Date.now() - renderStart;
+    fetch('http://127.0.0.1:7242/ingest/6712329c-12ed-47b3-85f9-78457616d544',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:620',message:'renderGridContent complete',data:{duration_ms:renderDuration,items_rendered:flatList.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
 }
 
 // ---------------------------------------------------------------------

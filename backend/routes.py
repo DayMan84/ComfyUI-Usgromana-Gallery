@@ -123,6 +123,16 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
     Optional query:
       - size=thumb   → return a cached thumbnail (max ~512px on the long side)
     """
+    import json
+    import time
+    # #region agent log
+    thumb_start = time.time()
+    log_data = {"location": "routes.py:118", "message": "gallery_image request", "data": {"filename": request.query.get("filename"), "size": request.query.get("size")}, "timestamp": int(time.time() * 1000), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "G"}
+    try:
+        with open(r"c:\Users\tansh\.github\ComfyUI-Usgromana-Gallery\.cursor\debug.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_data) + "\n")
+    except: pass
+    # #endregion
     filename = request.query.get("filename")
     if not filename:
         return _json({"ok": False, "error": "Missing filename"}, status=400)
@@ -150,12 +160,36 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
             )
 
             if needs_regen:
+                # #region agent log
+                thumb_gen_start = time.time()
+                log_data = {"location": "routes.py:152", "message": "Thumbnail generation start", "data": {"filename": filename}, "timestamp": int(time.time() * 1000), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "G"}
+                try:
+                    with open(r"c:\Users\tansh\.github\ComfyUI-Usgromana-Gallery\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        f.write(json.dumps(log_data) + "\n")
+                except: pass
+                # #endregion
                 with Image.open(safe_path) as im:
                     # Preserve aspect, cap the longest side
                     im.thumbnail((512, 512))
                     # Save as PNG regardless of original type
                     im.save(thumb_path, format="PNG")
+                # #region agent log
+                thumb_gen_duration = time.time() - thumb_gen_start
+                log_data = {"location": "routes.py:158", "message": "Thumbnail generation complete", "data": {"filename": filename, "duration_ms": int(thumb_gen_duration * 1000)}, "timestamp": int(time.time() * 1000), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "G"}
+                try:
+                    with open(r"c:\Users\tansh\.github\ComfyUI-Usgromana-Gallery\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        f.write(json.dumps(log_data) + "\n")
+                except: pass
+                # #endregion
 
+            # #region agent log
+            thumb_duration = time.time() - thumb_start
+            log_data = {"location": "routes.py:165", "message": "Thumbnail request complete", "data": {"filename": filename, "duration_ms": int(thumb_duration * 1000), "regenerated": needs_regen}, "timestamp": int(time.time() * 1000), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "G"}
+            try:
+                with open(r"c:\Users\tansh\.github\ComfyUI-Usgromana-Gallery\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_data) + "\n")
+            except: pass
+            # #endregion
             return web.FileResponse(path=thumb_path)
         except Exception as e:
             # Fall back to full image if thumb generation fails
