@@ -346,6 +346,28 @@ export function initGrid(root) {
         window.__USG_GALLERY_GRID_INIT__ = true;
         window.USG_GALLERY_SHOW_LOADING = showLoadingIndicator;
         window.USG_GALLERY_HIDE_LOADING = hideLoadingIndicator;
+        // Expose function to update rating from details panel
+        window.__USG_GALLERY_UPDATE_RATING__ = (key, rating) => {
+            if (key) {
+                ratingMap.set(key, rating);
+                // Also update with filename if relpath was used
+                const parts = key.split('/');
+                if (parts.length > 1 && parts[parts.length - 1]) {
+                    const filename = parts[parts.length - 1];
+                    ratingMap.set(filename, rating);
+                }
+                // Update image object if it exists in state
+                const allImages = getAllImagesRaw();
+                for (const img of allImages) {
+                    const imgKey = img.relpath || img.filename;
+                    if (imgKey === key) {
+                        img.rating = rating;
+                        break;
+                    }
+                }
+                renderGridContent();
+            }
+        };
     }
     
     reloadImagesAndRender();
@@ -1039,17 +1061,38 @@ function createCard(img, index) {
 // ---------------------------------------------------------------------
 
 function getRatingForImage(img) {
+    // Check img.rating first (from image data, may come from metadata)
     if (typeof img.rating === "number") return img.rating;
-    if (img.filename && ratingMap.has(img.filename)) return ratingMap.get(img.filename);
+    // Check ratingMap (from server ratings endpoint)
+    // Use relpath if available, fallback to filename
+    const key = img.relpath || img.filename;
+    if (key && ratingMap.has(key)) return ratingMap.get(key);
+    // Also check with just filename if relpath was used but not found
+    if (img.relpath && img.filename && ratingMap.has(img.filename)) {
+        return ratingMap.get(img.filename);
+    }
     return 0;
 }
 
-function setRating(img, rating) {
+async function setRating(img, rating) {
     if (img) {
         img.rating = rating;
-        if (img.filename) {
-            ratingMap.set(img.filename, rating);
-            saveRatingToServer(img.filename, rating);
+        const key = img.relpath || img.filename;
+        if (key) {
+            // Update ratingMap for immediate display
+            ratingMap.set(key, rating);
+            // Also update with filename if relpath was used
+            if (img.relpath && img.filename && img.relpath !== img.filename) {
+                ratingMap.set(img.filename, rating);
+            }
+            // Save to ratings endpoint (legacy)
+            saveRatingToServer(key, rating);
+            // Also save to metadata (newer approach, ensures consistency)
+            try {
+                await galleryApi.saveMetadata(key, { rating });
+            } catch (err) {
+                console.warn("[UsgromanaGallery] Failed to save rating to metadata:", err);
+            }
         }
     }
     renderGridContent();

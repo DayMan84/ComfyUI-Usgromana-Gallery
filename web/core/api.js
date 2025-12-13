@@ -44,13 +44,18 @@ export const galleryApi = {
 
     async saveMetadata(filename, meta) {
         if (!filename) return;
-        return await request(API_ENDPOINTS.META.replace(API_BASE, ""), {
-            method: "POST",
-            body: JSON.stringify({
-                filename,
-                meta: meta || {},
-            }),
-        });
+        try {
+            const result = await request(API_ENDPOINTS.META.replace(API_BASE, ""), {
+                method: "POST",
+                body: JSON.stringify({
+                    filename,
+                    meta: meta || {},
+                }),
+            });
+            return result;
+        } catch (err) {
+            throw err;
+        }
     },
 
     async getServerSettings() {
@@ -93,6 +98,7 @@ export const galleryApi = {
     },
 
     async renameFile(oldFilename, newFilename) {
+        // request() already prepends API_BASE, so just use "/rename"
         return await request("/rename", {
             method: "POST",
             body: JSON.stringify({ old_filename: oldFilename, new_filename: newFilename }),

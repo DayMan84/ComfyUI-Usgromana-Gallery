@@ -239,16 +239,41 @@ def _json(data: dict, status: int = 200) -> web.Response:
 
 def _safe_join_output(filename: str) -> str | None:
     """
-    Safely join a filename to the output directory and ensure
+    Safely join a filename or relpath to the output directory and ensure
     it cannot escape via .. or symlinks.
+    
+    Args:
+        filename: Can be just a filename (e.g., "image.png") or a relpath 
+                  (e.g., "sub/folder/image.png")
     """
     output_dir = os.path.abspath(get_output_dir())
-    candidate = os.path.abspath(os.path.join(output_dir, filename))
+    
+    # Normalize the filename/relpath - convert forward slashes to OS-specific separators
+    # and remove any leading slashes or dots
+    normalized = filename.replace("/", os.sep).replace("\\", os.sep)
+    # Remove leading separators and ".." components for safety
+    normalized = os.path.normpath(normalized)
+    if normalized.startswith(".."):
+        return None
+    
+    candidate = os.path.abspath(os.path.join(output_dir, normalized))
 
-    if not candidate.startswith(output_dir + os.sep) and candidate != output_dir:
+    # Check that the candidate path is within the output directory
+    # Use both forward and backslash for Windows compatibility
+    if not (candidate.startswith(output_dir + os.sep) or candidate == output_dir):
         return None
+    
     if not os.path.isfile(candidate):
+        # Try to find the file by just the filename (in case relpath was wrong)
+        just_filename = os.path.basename(normalized)
+        if just_filename != normalized:
+            # If it's a relpath, try searching for just the filename
+            for root, dirs, files in os.walk(output_dir):
+                if just_filename in files:
+                    found_path = os.path.join(root, just_filename)
+                    return found_path
         return None
+    
     return candidate
 
 
@@ -949,8 +974,18 @@ async def gallery_set_rating(request: web.Request) -> web.Response:
 async def gallery_get_ratings(request: web.Request) -> web.Response:
     """
     Return all stored ratings as { filename: rating, ... }.
+    Includes ratings from both the legacy ratings file and metadata.
     """
     ratings = _load_ratings()
+    
+    # Also include ratings from metadata (metadata takes precedence)
+    meta = _load_meta()
+    for filename, meta_data in meta.items():
+        if isinstance(meta_data, dict) and "rating" in meta_data:
+            rating_value = meta_data["rating"]
+            if isinstance(rating_value, (int, float)) and 0 <= rating_value <= 5:
+                ratings[filename] = int(rating_value)
+    
     return web.json_response(ratings)
 
 
@@ -980,42 +1015,202 @@ def _save_meta(meta: dict) -> None:
 async def gallery_get_meta(request: web.Request) -> web.Response:
     """
     Get stored metadata for a single image.
-    Query: ?filename=<name>
+    Query: ?filename=<name> (can be relpath like "sub/folder/image.png" or just "image.png")
+    Extracts metadata from image file (workflow, prompts, parameters) and merges with stored metadata.
     Also includes NSFW status if API is available.
     """
     filename = request.query.get("filename")
     if not filename:
         return _json({"ok": False, "error": "Missing filename"}, status=400)
 
+    # Load stored metadata (user-edited fields like tags, display_name, rating)
     meta = _load_meta()
     result_meta = meta.get(filename, {})
     
+    # Extract metadata from image file
+    safe_path = _safe_join_output(filename)
+    if safe_path:
+        try:
+            from .metadata_extractor import extract_image_metadata
+            extracted_meta = extract_image_metadata(safe_path)
+            
+            # Merge extracted metadata with stored metadata (stored takes precedence for user-edited fields)
+            # Extract structured prompts
+            if "structured_prompts" in extracted_meta:
+                sp = extracted_meta["structured_prompts"]
+                # Add positive/negative prompts if available
+                if sp.get("positive"):
+                    result_meta["positive_prompt"] = sp["positive"]
+                if sp.get("negative"):
+                    result_meta["negative_prompt"] = sp["negative"]
+                # Add generation parameters
+                if sp.get("parameters"):
+                    params = sp["parameters"]
+                    if params.get("model"):
+                        result_meta["model"] = params["model"]
+                    if params.get("sampler"):
+                        result_meta["sampler"] = params["sampler"]
+                    if params.get("steps"):
+                        result_meta["steps"] = params["steps"]
+                    if params.get("cfg_scale"):
+                        result_meta["cfg_scale"] = params["cfg_scale"]
+                    if params.get("seed"):
+                        result_meta["seed"] = params["seed"]
+                    if params.get("scheduler"):
+                        result_meta["scheduler"] = params["scheduler"]
+                    if params.get("loras"):
+                        result_meta["loras"] = params["loras"]
+            
+            # Add workflow and prompt if available (for advanced editing)
+            if "workflow" in extracted_meta:
+                result_meta["workflow_data"] = extracted_meta["workflow"]
+            if "prompt" in extracted_meta:
+                result_meta["prompt_data"] = extracted_meta["prompt"]
+            
+            # Add file info if not already present
+            if "fileinfo" in extracted_meta:
+                result_meta["fileinfo"] = extracted_meta["fileinfo"]
+            
+            # Add Usgromana NSFW metadata if present
+            if "usgromana_nsfw" in extracted_meta:
+                result_meta["usgromana_nsfw"] = extracted_meta["usgromana_nsfw"]
+            if "usgromana_nsfw_label" in extracted_meta:
+                result_meta["usgromana_nsfw_label"] = extracted_meta["usgromana_nsfw_label"]
+            if "usgromana_nsfw_score" in extracted_meta:
+                result_meta["usgromana_nsfw_score"] = extracted_meta["usgromana_nsfw_score"]
+            
+            # If UsgromanaNSFW is found, use it for is_nsfw
+            if "usgromana_nsfw" in extracted_meta:
+                result_meta["is_nsfw"] = extracted_meta["usgromana_nsfw"]
+            
+            # Add rating and tags from image metadata if present (and not already in stored metadata)
+            # This allows rating/tags stored in image to be read back
+            if "rating" in extracted_meta and "rating" not in result_meta:
+                result_meta["rating"] = extracted_meta["rating"]
+            if "tags" in extracted_meta and "tags" not in result_meta:
+                result_meta["tags"] = extracted_meta["tags"]
+            
+        except Exception as e:
+            # Only log errors, not successful extractions
+            print(f"[Usgromana-Gallery] Error extracting metadata from image '{filename}': {e}")
+    
     # Add NSFW status if API is available
+    # We need to check the ACTUAL NSFW status of the image, not whether it should be blocked for the current user
+    # The best way is to read the NSFW tag directly from the image metadata
     if _NSFW_API_AVAILABLE:
         try:
-            safe_path = _safe_join_output(filename)
             if safe_path:
-                username = _get_username_from_request(request)
-                current_user = get_current_user()
-                if username != current_user:
-                    if username:
-                        set_user_context(username)
-                    else:
-                        set_user_context(None)
+                # Try to read NSFW tag directly from image metadata first
+                nsfw_tag_value = None
+                try:
+                    from PIL import Image
+                    img = Image.open(safe_path)
+                    # Check for NSFW tag in PNG text chunks or EXIF
+                    
+                    # Check PNG text chunks - check UsgromanaNSFW first (most reliable)
+                    if hasattr(img, 'text') and img.text:
+                        # Check for UsgromanaNSFW tag (primary source)
+                        if "UsgromanaNSFW" in img.text:
+                            tag_value = str(img.text["UsgromanaNSFW"]).lower()
+                            if tag_value in ('true', '1', 'yes'):
+                                nsfw_tag_value = True
+                            elif tag_value in ('false', '0', 'no'):
+                                nsfw_tag_value = False
+                        
+                        # Fallback to other possible keys
+                        if nsfw_tag_value is None:
+                            possible_keys = ['nsfw', 'NSFW', 'nsfw_tag', 'nsfw_status', 'content_warning']
+                            for key in possible_keys:
+                                if key in img.text:
+                                    tag_value = str(img.text[key]).lower()
+                                    if tag_value in ('true', '1', 'yes'):
+                                        nsfw_tag_value = True
+                                        break
+                                    elif tag_value in ('false', '0', 'no'):
+                                        nsfw_tag_value = False
+                                        break
+                        
+                        # Also check for any key containing 'nsfw' (case insensitive)
+                        if nsfw_tag_value is None:
+                            for key, value in img.text.items():
+                                if 'nsfw' in key.lower():
+                                    tag_value = str(value).lower()
+                                    if tag_value in ('true', '1', 'yes'):
+                                        nsfw_tag_value = True
+                                        break
+                                    elif tag_value in ('false', '0', 'no'):
+                                        nsfw_tag_value = False
+                                        break
+                    
+                    # If not found in PNG text, check EXIF (for JPEG)
+                    if nsfw_tag_value is None and hasattr(img, '_getexif') and img._getexif():
+                        exif = img._getexif()
+                        # Look for NSFW tag in EXIF (custom tag or standard)
+                        # The NSFW API might store it in a custom EXIF tag
+                        # For now, we'll rely on the API check if metadata reading doesn't work
+                        pass
+                    
+                    img.close()
+                except Exception as img_err:
+                    # Only log errors, not normal operation
+                    pass
                 
-                # Use fast check to get NSFW status (uses cached tags)
-                if check_image_path_nsfw_fast:
-                    is_nsfw = check_image_path_nsfw_fast(safe_path, username)
-                    if is_nsfw is not None:
-                        result_meta["is_nsfw"] = is_nsfw
+                if nsfw_tag_value is not None:
+                    result_meta["is_nsfw"] = nsfw_tag_value
                 else:
-                    # Fallback to regular check
-                    is_nsfw = check_image_path_nsfw(safe_path, username)
-                    result_meta["is_nsfw"] = is_nsfw
+                    # If no tag in metadata, use API to check (but check as unrestricted user)
+                    # Save current user context
+                    original_user = get_current_user()
+                    username = _get_username_from_request(request)
+                    
+                    # Check with a user that has no restrictions to get actual tag status
+                    # If the current user has no restrictions, use them; otherwise check as None
+                    check_username = None
+                    if username and is_sfw_enforced_for_user:
+                        if not is_sfw_enforced_for_user(username):
+                            # User has no restrictions, can use them to check
+                            check_username = username
+                    
+                    # Set context for check
+                    if check_username != get_current_user():
+                        if check_username:
+                            set_user_context(check_username)
+                        else:
+                            set_user_context(None)
+                    
+                    # Use fast check to get NSFW status
+                    # Note: The fast check returns whether the image should be BLOCKED for the user,
+                    # not the actual NSFW tag status. We need to infer the tag status.
+                    # If check_username has no restrictions and the check returns True, the image IS NSFW.
+                    # If check_username has no restrictions and the check returns False, the image is NOT NSFW.
+                    # If check_username is None (guest), the API enforces restrictions, so True = NSFW, False = SFW
+                    if check_image_path_nsfw_fast:
+                        blocking_result = check_image_path_nsfw_fast(safe_path, check_username)
+                        
+                        # If we're checking as an unrestricted user (or None/guest where API enforces),
+                        # the blocking result directly indicates NSFW status
+                        if blocking_result is not None:
+                            # For unrestricted users or guests, blocking=True means image IS NSFW
+                            result_meta["is_nsfw"] = blocking_result
+                    else:
+                        # Fallback to regular check
+                        blocking_result = check_image_path_nsfw(safe_path, check_username)
+                        # For unrestricted users, blocking result = NSFW status
+                        result_meta["is_nsfw"] = blocking_result
+                    
+                    # Restore original user context
+                    if original_user != get_current_user():
+                        if original_user:
+                            set_user_context(original_user)
+                        else:
+                            set_user_context(None)
+            else:
+                print(f"[Usgromana-Gallery] Could not get safe path for {filename}")
         except Exception as e:
             # If check fails, don't include NSFW status
             print(f"[Usgromana-Gallery] Error checking NSFW status for metadata: {e}")
-    
+            import traceback
+            traceback.print_exc()
     return _json({"ok": True, "meta": result_meta})
 
 
@@ -1024,6 +1219,7 @@ async def gallery_set_meta(request: web.Request) -> web.Response:
     """
     Set stored metadata for a single image.
     Body: { "filename": "...", "meta": { ... } }
+    Also writes metadata back to PNG file if write_to_image is True.
     """
     try:
         body = await request.json()
@@ -1032,13 +1228,64 @@ async def gallery_set_meta(request: web.Request) -> web.Response:
 
     filename = body.get("filename")
     payload = body.get("meta") or {}
+    write_to_image = body.get("write_to_image", False)  # Option to write to image file
 
     if not filename:
         return _json({"ok": False, "error": "Missing filename"}, status=400)
 
+    # Save to JSON metadata file (always)
+    # Merge with existing metadata instead of replacing
     meta = _load_meta()
-    meta[filename] = payload
+    if filename in meta:
+        # Merge new payload with existing metadata
+        existing = meta[filename]
+        if isinstance(existing, dict) and isinstance(payload, dict):
+            meta[filename] = {**existing, **payload}
+        else:
+            meta[filename] = payload
+    else:
+        meta[filename] = payload
+    
+    print(f"[Usgromana-Gallery] Saving metadata for '{filename}': {list(payload.keys())}")
     _save_meta(meta)
+    
+    # Automatically write rating, display_name (title), and tags to image file (always, not just when write_to_image is True)
+    # This ensures rating, title, and tags are persisted in the image metadata for Windows Properties compatibility
+    safe_path = _safe_join_output(filename)
+    if safe_path and ("rating" in payload or "tags" in payload or "display_name" in payload):
+        try:
+            from .metadata_writer import write_metadata_to_image
+            # Write rating, display_name (as Title), and tags to image
+            image_meta = {}
+            if "rating" in payload:
+                image_meta["rating"] = payload["rating"]
+            if "display_name" in payload:
+                image_meta["display_name"] = payload["display_name"]
+            if "tags" in payload:
+                image_meta["tags"] = payload["tags"]
+            
+            if image_meta:
+                success = write_metadata_to_image(safe_path, image_meta, preserve_existing=True)
+                if success:
+                    print(f"[Usgromana-Gallery] Wrote rating/title/tags to image file '{filename}'")
+                else:
+                    print(f"[Usgromana-Gallery] Warning: Failed to write rating/title/tags to image file '{filename}'")
+        except Exception as e:
+            print(f"[Usgromana-Gallery] Error writing rating/title/tags to image '{filename}': {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Optionally write other metadata to image file
+    if write_to_image:
+        safe_path = _safe_join_output(filename)
+        if safe_path:
+            try:
+                from .metadata_writer import write_metadata_to_image
+                success = write_metadata_to_image(safe_path, payload, preserve_existing=True)
+                if not success:
+                    print(f"[Usgromana-Gallery] Warning: Failed to write metadata to image file '{filename}'")
+            except Exception as e:
+                print(f"[Usgromana-Gallery] Error writing metadata to image '{filename}': {e}")
 
     return _json({"ok": True})
 
@@ -1048,6 +1295,7 @@ async def gallery_rename_file(request: web.Request) -> web.Response:
     """
     Rename a file (admin only).
     Body: { "old_filename": "...", "new_filename": "..." }
+    old_filename can be a relpath (e.g., "sub/folder/image.png") or just a filename.
     """
     try:
         body = await request.json()
@@ -1056,6 +1304,9 @@ async def gallery_rename_file(request: web.Request) -> web.Response:
     
     old_filename = body.get("old_filename")
     new_filename = body.get("new_filename")
+    
+    # Log for debugging
+    print(f"[Usgromana-Gallery] Rename request: old_filename={old_filename}, new_filename={new_filename}")
     
     if not old_filename or not new_filename:
         return _json({"ok": False, "error": "Missing old_filename or new_filename"}, status=400)
@@ -1071,11 +1322,16 @@ async def gallery_rename_file(request: web.Request) -> web.Response:
     
     old_path = _safe_join_output(old_filename)
     if old_path is None:
+        print(f"[Usgromana-Gallery] Rename failed: Could not find file for '{old_filename}'")
         return _json({"ok": False, "error": "File not found or invalid path"}, status=404)
+    
+    print(f"[Usgromana-Gallery] Rename: Found old_path={old_path}")
     
     # Get directory of old file
     old_dir = os.path.dirname(old_path)
     new_path = os.path.join(old_dir, new_filename)
+    
+    print(f"[Usgromana-Gallery] Rename: new_path={new_path}")
     
     # Check if new file already exists
     if os.path.exists(new_path):
@@ -1084,22 +1340,55 @@ async def gallery_rename_file(request: web.Request) -> web.Response:
     try:
         # Rename the file
         os.rename(old_path, new_path)
+        print(f"[Usgromana-Gallery] Rename: File renamed successfully from {old_path} to {new_path}")
         
-        # Update metadata if it exists
+        # Calculate new relpath for metadata/ratings update
+        output_dir = os.path.abspath(get_output_dir())
+        new_relpath = os.path.relpath(new_path, output_dir).replace("\\", "/")
+        
+        # Update metadata if it exists (check both old_filename and old relpath)
         meta = _load_meta()
+        metadata_updated = False
+        
+        # Try to find metadata by old_filename (could be relpath or just filename)
         if old_filename in meta:
-            meta[new_filename] = meta[old_filename]
+            meta[new_relpath] = meta[old_filename]
             del meta[old_filename]
+            metadata_updated = True
+            print(f"[Usgromana-Gallery] Rename: Updated metadata from key '{old_filename}' to '{new_relpath}'")
+        else:
+            # Try to find by relpath if old_filename was just a filename
+            old_relpath = os.path.relpath(old_path, output_dir).replace("\\", "/")
+            if old_relpath in meta:
+                meta[new_relpath] = meta[old_relpath]
+                del meta[old_relpath]
+                metadata_updated = True
+                print(f"[Usgromana-Gallery] Rename: Updated metadata from key '{old_relpath}' to '{new_relpath}'")
+        
+        if metadata_updated:
             _save_meta(meta)
         
-        # Update ratings if they exist
+        # Update ratings if they exist (same logic as metadata)
         ratings = _load_ratings()
+        ratings_updated = False
+        
         if old_filename in ratings:
-            ratings[new_filename] = ratings[old_filename]
+            ratings[new_relpath] = ratings[old_filename]
             del ratings[old_filename]
+            ratings_updated = True
+            print(f"[Usgromana-Gallery] Rename: Updated ratings from key '{old_filename}' to '{new_relpath}'")
+        else:
+            old_relpath = os.path.relpath(old_path, output_dir).replace("\\", "/")
+            if old_relpath in ratings:
+                ratings[new_relpath] = ratings[old_relpath]
+                del ratings[old_relpath]
+                ratings_updated = True
+                print(f"[Usgromana-Gallery] Rename: Updated ratings from key '{old_relpath}' to '{new_relpath}'")
+        
+        if ratings_updated:
             _save_ratings(ratings)
         
-        return _json({"ok": True, "message": "File renamed successfully"})
+        return _json({"ok": True, "message": "File renamed successfully", "new_filename": new_relpath})
     except OSError as e:
         return _json({"ok": False, "error": f"Failed to rename file: {str(e)}"}, status=500)
     except Exception as e:

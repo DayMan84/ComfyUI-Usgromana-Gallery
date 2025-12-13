@@ -1,8 +1,8 @@
 // ComfyUI-Usgromana-Gallery/web/ui/details.js
-// Persistent details overlay + 3-image viewer (1 full + 2 thumbs) + history via metadata markers
+// Persistent details overlay + 3-image viewer (1 full + 2 thumbs)
 // Details NEVER generates thumbnails. It only reuses thumbs registered by the grid/state.
 
-import { getImages, getImageKey, getThumbnail } from "../core/state.js";
+import { getImages } from "../core/state.js";
 import { galleryApi } from "../core/api.js";
 import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
@@ -15,6 +15,18 @@ let imgEl = null;
 let btnMeta = null;
 let btnOpen = null;
 let btnClose = null;
+let btnZoom = null;
+
+// Zoom and drag state
+let zoomEnabled = false;
+let currentZoom = 1.0;
+let currentPanX = 0;
+let currentPanY = 0;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let zoomStartPanX = 0;
+let zoomStartPanY = 0;
 
 let leftTile = null;
 let rightTile = null;
@@ -24,8 +36,6 @@ let rightTileImg = null;
 let metaPanel = null;
 let metaContent = null;
 
-let historyContainer = null;
-let historyObserver = null;
 
 let currentIndex = null;
 let currentImageUrl = null;
@@ -43,27 +53,8 @@ const metaCache = new Map();
 const MAX_META_CACHE_SIZE = 500;
 
 // --------------------------
-// Helpers: history marker
+// Helpers: metadata
 // --------------------------
-function computeStem(filename = "") {
-    const base = (filename.split("/").pop() || filename).replace(/\.[^.]+$/, "");
-    return base
-        .replace(/[_-]\d{3,}$/g, "")
-        .replace(/\(\d+\)$/g, "")
-        .trim();
-}
-
-function computeHistoryKey(imgInfo = {}) {
-    if (!imgInfo) return null;
-    if (imgInfo.history_key) return imgInfo.history_key;
-
-    const wf = imgInfo.workflow_id || imgInfo.workflow || null;
-    if (wf) return `wf:${wf}`;
-
-    const rel = imgInfo.relpath || imgInfo.filename || "";
-    const stem = computeStem(rel);
-    return stem ? `stem:${stem}` : null;
-}
 
 async function getSavedMeta(filename) {
     if (!filename) return {};
@@ -96,9 +87,10 @@ async function ensureHistoryMarker(imgInfo) {
     if (!imgInfo || !imgInfo.filename) return null;
 
     // merge saved meta (non-destructive)
-    const saved = await getSavedMeta(imgInfo.filename);
+    // Use relpath if available (includes subdirectory), otherwise fall back to filename
+    const metaKey = imgInfo.relpath || imgInfo.filename;
+    const saved = await getSavedMeta(metaKey);
     if (saved && typeof saved === "object") {
-        if (imgInfo.history_key == null && saved.history_key != null) imgInfo.history_key = saved.history_key;
         if (imgInfo.tags == null && Array.isArray(saved.tags)) imgInfo.tags = saved.tags;
         if (imgInfo.rating == null && typeof saved.rating === "number") imgInfo.rating = saved.rating;
         if (imgInfo.display_name == null && typeof saved.display_name === "string") imgInfo.display_name = saved.display_name;
@@ -107,71 +99,7 @@ async function ensureHistoryMarker(imgInfo) {
         if (imgInfo.full_prompt == null && typeof saved.full_prompt === "string") imgInfo.full_prompt = saved.full_prompt;
     }
 
-    const key = computeHistoryKey(imgInfo);
-    if (!key) return null;
-
-    // already matches
-    if (imgInfo.history_key === key) return key;
-
-    // best-effort persist marker (will fail for guests; UI should still work)
-    imgInfo.history_key = key;
-    try {
-        await galleryApi.saveMetadata(imgInfo.filename, { history_key: key });
-        metaCache.set(imgInfo.filename, { ...(metaCache.get(imgInfo.filename) || {}), history_key: key });
-    } catch (err) {
-        console.warn("[UsgromanaGallery] Unable to persist history marker:", err);
-    }
-
-    return key;
-}
-
-// --------------------------
-// History strip lazy-load/unload
-// --------------------------
-function setupHistoryLazyLoading(container) {
-    if (historyObserver) {
-        historyObserver.disconnect();
-        historyObserver = null;
-    }
-
-    if (!("IntersectionObserver" in window)) {
-        const imgs = container.querySelectorAll("img[data-src]");
-        imgs.forEach((img) => { img.src = img.dataset.src; });
-        return;
-    }
-
-    historyObserver = new IntersectionObserver(
-        (entries) => {
-            for (const entry of entries) {
-                const img = entry.target;
-                if (!img.dataset.src) continue;
-
-                if (entry.isIntersecting) {
-                    if (!img.src) img.src = img.dataset.src;
-                } else {
-                    // unload when offscreen to free memory
-                    unloadImage(img);
-                }
-            }
-        },
-        { root: container, rootMargin: "256px 0px", threshold: 0.01 }
-    );
-
-    container.querySelectorAll("img[data-src]").forEach((img) => historyObserver.observe(img));
-}
-
-function clearHistoryStrip() {
-    if (historyObserver) {
-        historyObserver.disconnect();
-        historyObserver = null;
-    }
-    if (historyContainer) {
-        historyContainer.querySelectorAll("img").forEach((img) => {
-            unloadImage(img);
-        });
-        historyContainer.innerHTML = "";
-        historyContainer.style.display = "none";
-    }
+    return null;
 }
 
 // --------------------------
@@ -187,7 +115,7 @@ export function initDetails(_rootIgnored) {
             canEditMeta = canEditMetadata(user);
             if (modalEl && modalEl.style.display !== "none" && currentImageInfo) {
                 // re-render metadata to reflect edit permissions
-                fillMetadata(currentImageInfo, currentImageInfo.history_key || computeHistoryKey(currentImageInfo));
+                fillMetadata(currentImageInfo);
             }
         })
         .catch(() => {
@@ -233,13 +161,19 @@ export function initDetails(_rootIgnored) {
     imgEl.alt = "Selected image";
     imgEl.decoding = "async";
     Object.assign(imgEl.style, {
-        maxWidth: "80vw",
-        maxHeight: "80vh",
+        maxWidth: "85vw",
+        maxHeight: "85vh",
         borderRadius: "10px",
         display: "block",
         userSelect: "none",
+        padding: "-6px",
+        transition: "transform 0.1s ease-out",
+        transformOrigin: "center center",
     });
     cardEl.appendChild(imgEl);
+    
+    // Setup zoom and drag event listeners
+    setupZoomAndDrag();
 
     // top-right buttons
     const topControls = document.createElement("div");
@@ -248,6 +182,7 @@ export function initDetails(_rootIgnored) {
         top: "10px",
         right: "10px",
         display: "flex",
+        flexDirection: "column",
         gap: "6px",
         zIndex: "2",
     });
@@ -257,38 +192,46 @@ export function initDetails(_rootIgnored) {
         b.textContent = label;
         b.title = title;
         Object.assign(b.style, {
-            borderRadius: "999px",
-            border: "1px solid rgba(148,163,184,0.45)",
-            padding: "4px 10px",
             fontSize: "12px",
             cursor: "pointer",
-            background: "rgba(15,23,42,0.85)",
+            background: "rgba(0, 0, 0, 0.1)",
+            border: "none",
+            padding: "4px 6px",
+            margin: "0",
             color: "#e5e7eb",
+            borderRadius: "1px",
         });
         return b;
     };
 
-    btnMeta = mkBtn("Meta", "Show metadata");
-    btnMeta.onclick = (ev) => {
-        ev.stopPropagation();
-        toggleMetadata();
-    };
-
-    btnOpen = mkBtn("Open", "Open image in new tab");
-    btnOpen.onclick = (ev) => {
-        ev.stopPropagation();
-        if (currentImageUrl) window.open(currentImageUrl, "_blank", "noopener,noreferrer");
-    };
-
-    btnClose = mkBtn("✕", "Close");
+    btnClose = mkBtn("✖", "Close");
     btnClose.onclick = (ev) => {
         ev.stopPropagation();
         hideDetails();
     };
 
+    btnMeta = mkBtn("ⓘ", "Show metadata");
+    btnMeta.onclick = (ev) => {
+        ev.stopPropagation();
+        toggleMetadata();
+    };
+
+    btnOpen = mkBtn("⌕", "Open image in new tab");
+    btnOpen.onclick = (ev) => {
+        ev.stopPropagation();
+        if (currentImageUrl) window.open(currentImageUrl, "_blank", "noopener,noreferrer");
+    };
+
+    btnZoom = mkBtn("+", "Zoom and drag mode");
+    btnZoom.onclick = (ev) => {
+        ev.stopPropagation();
+        toggleZoomMode();
+    };
+
+    topControls.appendChild(btnClose);
     topControls.appendChild(btnMeta);
     topControls.appendChild(btnOpen);
-    topControls.appendChild(btnClose);
+    topControls.appendChild(btnZoom);
     cardEl.appendChild(topControls);
 
     // side tiles
@@ -300,16 +243,19 @@ export function initDetails(_rootIgnored) {
     // metadata panel
     metaPanel = document.createElement("div");
     Object.assign(metaPanel.style, {
-        position: "absolute",
-        top: "0",
+        position: "fixed", // Fixed relative to viewport, not modal
+        top: "50%",
         right: "0",
-        height: "100%",
+        transform: "translateY(-50%)", // Center vertically
+        height: "90vh", // Use viewport height instead of 100%
+        maxHeight: "85vh",
         width: "340px",
         padding: "10px",
         display: "none",
         flexDirection: "column",
         background: "rgba(15,15,15,0.92)",
         borderLeft: "1px solid rgba(255,255,255,0.12)",
+        zIndex: "20001", // Above the card
     });
 
     metaContent = document.createElement("div");
@@ -321,20 +267,9 @@ export function initDetails(_rootIgnored) {
         fontSize: "12px",
     });
 
-    historyContainer = document.createElement("div");
-    Object.assign(historyContainer.style, {
-        marginTop: "10px",
-        paddingTop: "8px",
-        borderTop: "1px solid rgba(255,255,255,0.12)",
-        display: "none",
-        maxHeight: "240px",
-        overflowY: "auto",
-    });
-
     metaPanel.appendChild(metaContent);
-    metaPanel.appendChild(historyContainer);
-    // Attach metadata panel to cardEl so it's positioned relative to the card
-    cardEl.appendChild(metaPanel);
+    // Attach metadata panel to modalEl so it's positioned relative to the modal, not the card
+    modalEl.appendChild(metaPanel);
 
     // compose
     modalEl.appendChild(cardEl);
@@ -475,24 +410,43 @@ export async function showDetailsForIndex(index) {
     const imgInfo = items[currentIndex];
     currentImageInfo = imgInfo;
 
-    // ensure/merge history marker
-    const historyKey = await ensureHistoryMarker(imgInfo);
+    // ensure/merge metadata
+    await ensureHistoryMarker(imgInfo);
 
     // MAIN IMAGE: full-res only here (no thumb fallbacks)
     const rel = imgInfo.relpath || imgInfo.filename || "";
-    currentImageUrl = imgInfo.url || `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
-
+    const newImageUrl = imgInfo.url || `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    
+    // Reset zoom and drag when switching images
+    resetZoomAndDrag();
+    
+    // Always update image URL (even if same, to ensure it displays)
+    currentImageUrl = newImageUrl;
+    
     // protect against out-of-order loads when navigating fast
     const loadToken = Symbol("details-load");
     imgEl._loadToken = loadToken;
 
-    imgEl.onload = () => {
+    const handleImageLoad = () => {
         if (imgEl._loadToken !== loadToken) return;
         resizeCardToImage();
-        fillMetadata(imgInfo, historyKey);
+        fillMetadata(imgInfo);
     };
 
+    imgEl.onload = handleImageLoad;
+    imgEl.onerror = () => {
+        console.warn("[UsgromanaGallery] Failed to load image:", currentImageUrl);
+    };
+
+    // Always set src to ensure image updates
+    // This ensures arrow key navigation always updates the center image
     imgEl.src = currentImageUrl;
+    
+    // If image is already loaded (cached), trigger handler immediately
+    // This handles the case where browser cache makes onload not fire
+    if (imgEl.complete) {
+        setTimeout(() => handleImageLoad(), 0);
+    }
 
     // PREV/NEXT: thumbnails only, from state registry or existing thumb_url only.
     // Use the SAME items array that was used to calculate currentIndex
@@ -570,16 +524,39 @@ export function hideDetails() {
     if (leftTileImg) unloadImage(leftTileImg);
     if (rightTileImg) unloadImage(rightTileImg);
 
-    // wipe history strip + observer
-    clearHistoryStrip();
 
     // reset meta panel
     metadataVisible = false;
-    if (metaPanel) metaPanel.style.display = "none";
+    if (metaPanel) {
+        metaPanel.style.display = "none";
+        // Reset panel position to default (viewport edge)
+        Object.assign(metaPanel.style, {
+            left: "auto",
+            right: "0",
+        });
+    }
+
+    // Restore card position to center (reset marginRight)
+    if (cardEl) {
+        Object.assign(cardEl.style, {
+            marginRight: "0",
+        });
+    }
+
+    // Restore side tiles visibility
+    if (leftTile) {
+        leftTile.style.display = "flex";
+    }
+    if (rightTile) {
+        rightTile.style.display = "flex";
+    }
 
     currentIndex = null;
     currentImageUrl = null;
     currentImageInfo = null;
+    
+    // Reset zoom and drag state
+    resetZoomAndDrag();
     
     // Clear metadata cache periodically to prevent memory leaks
     if (metaCache.size > MAX_META_CACHE_SIZE * 0.8) {
@@ -616,22 +593,114 @@ function toggleMetadata() {
             });
         }
         
-        // Metadata panel is already positioned absolutely, just ensure it's visible
-        if (metaPanel) {
-            // Panel is already positioned absolute with right: 0, which is correct
-            // Just ensure it's displayed
+        // Metadata panel positioning - position it relative to the card's right edge
+        if (metaPanel && cardEl) {
+            // Ensure panel is visible before getting its position
+            if (metaPanel.style.display === "none") {
+                metaPanel.style.display = "flex";
+            }
+            
+            // Function to update panel position based on card's right edge
+            const updatePanelPosition = () => {
+                const cardRect = cardEl.getBoundingClientRect();
+                const panelWidth = 340;
+                const gap = 20;
+                const panelLeft = cardRect.right + gap;
+                
+                // Position panel fixed relative to viewport, next to card's right edge
+                Object.assign(metaPanel.style, {
+                    position: "fixed",
+                    left: `${panelLeft}px`,
+                    right: "auto", // Override right: 0
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    height: "90vh",
+                    maxHeight: "90vh",
+                    width: `${panelWidth}px`,
+                    zIndex: "20001",
+                    transition: "left 0.3s ease", // Match card's transition duration
+                });
+            };
+            
+            // Get current panel position (at right: 0, viewport edge)
+            const currentPanelRect = metaPanel.getBoundingClientRect();
+            const currentPanelLeft = currentPanelRect.left;
+            const gap = 20;
+            
+            // Start from current position (viewport edge) to avoid jump
+            Object.assign(metaPanel.style, {
+                left: `${currentPanelLeft}px`,
+                right: "auto", // Remove right: 0 to allow left positioning
+                transition: "none", // No transition initially
+            });
+            
+            // Force a reflow to ensure the left value is applied
+            void metaPanel.offsetWidth;
+            
+            // Wait for card transition to complete, THEN calculate and transition panel position
+            // This ensures we use the actual final card position, not a predicted one
+            setTimeout(() => {
+                // Get the ACTUAL final card position after transition
+                const finalCardRect = cardEl.getBoundingClientRect();
+                const finalPanelLeft = finalCardRect.right + gap;
+                
+                // Now transition to final position smoothly
+                Object.assign(metaPanel.style, {
+                    left: `${finalPanelLeft}px`,
+                    transition: "left 0.3s ease", // Smooth transition
+                });
+            }, 350); // Wait for card's margin transition (0.3s) to complete first
+            
+            // Store update function for resize handler
+            if (!window._galleryPanelUpdatePosition) {
+                window._galleryPanelUpdatePosition = updatePanelPosition;
+                window.addEventListener('resize', () => {
+                    if (metadataVisible && metaPanel && cardEl) {
+                        updatePanelPosition();
+                    }
+                });
+            }
         }
         
-        // if we already have an image open, rebuild metadata (includes history)
+        // if we already have an image open, rebuild metadata
         if (currentImageInfo) {
-            fillMetadata(currentImageInfo, currentImageInfo.history_key || computeHistoryKey(currentImageInfo));
+            fillMetadata(currentImageInfo);
         }
     } else {
         metaPanel.style.display = "none";
         btnMeta.title = "Show metadata";
-        clearHistoryStrip();
         
-        // Restore side tiles when metadata is hidden
+        // Restore card position: center (with transition)
+        if (cardEl) {
+            Object.assign(cardEl.style, {
+                marginRight: "0",
+                transition: "margin-right 0.3s ease",
+            });
+        }
+        
+        // Reset panel position when hidden (with smooth transition)
+        if (metaPanel) {
+            // Get current position before resetting
+            const currentLeft = metaPanel.style.left || metaPanel.getBoundingClientRect().left;
+            
+            // Transition back to right edge smoothly
+            Object.assign(metaPanel.style, {
+                left: `${currentLeft}px`, // Start from current position
+                right: "auto",
+                transition: "left 0.3s ease", // Smooth transition
+            });
+            
+            // Force reflow, then move to right edge
+            void metaPanel.offsetWidth;
+            requestAnimationFrame(() => {
+                Object.assign(metaPanel.style, {
+                    left: "auto",
+                    right: "0", // Restore to viewport edge when hidden
+                });
+            });
+        }
+        
+        // Restore side tiles immediately, then ensure they stay visible after transitions
         if (leftTile) {
             leftTile.style.display = "flex";
         }
@@ -639,12 +708,18 @@ function toggleMetadata() {
             rightTile.style.display = "flex";
         }
         
-        // Restore card position: center
-        if (cardEl) {
-            Object.assign(cardEl.style, {
-                marginRight: "0",
-            });
-        }
+        // Ensure side tiles stay visible after transitions complete (in case they get hidden somehow)
+        setTimeout(() => {
+            if (leftTile) {
+                leftTile.style.display = "flex";
+            }
+            if (rightTile) {
+                rightTile.style.display = "flex";
+            }
+            if (cardEl && cardEl.style.marginRight !== "0") {
+                cardEl.style.marginRight = "0";
+            }
+        }, 350); // Wait for card transition (0.3s) to complete
     }
 }
 
@@ -652,7 +727,8 @@ async function persistMetadata() {
     if (!currentImageInfo || !currentImageInfo.filename) return;
 
     try {
-        await galleryApi.saveMetadata(currentImageInfo.filename, {
+        const metaKey = currentImageInfo.relpath || currentImageInfo.filename;
+        await galleryApi.saveMetadata(metaKey, {
             tags: currentImageInfo.tags || [],
             display_name: currentImageInfo.display_name || null,
             rating: currentImageInfo.rating || 0,
@@ -703,12 +779,11 @@ function addRow(label, value) {
     metaContent.appendChild(row);
 }
 
-async function fillMetadata(imgInfo, historyKey) {
+async function fillMetadata(imgInfo) {
     if (!metaContent) return;
 
-    // if meta panel is hidden, don’t waste time building it
+    // if meta panel is hidden, don't waste time building it
     if (!metadataVisible) {
-        clearHistoryStrip();
         return;
     }
 
@@ -733,101 +808,371 @@ async function fillMetadata(imgInfo, historyKey) {
 
     const dateStr = formatDate(mtime);
     const sizeStr = formatFileSize(size);
+    
+    // Check if user is admin (needed for editable fields)
+    const isAdmin = canEditMeta && currentUser && (currentUser.is_admin === true || (Array.isArray(currentUser.groups) && currentUser.groups.includes("admin")));
 
-    // File name (editable for admins)
-    const fileRow = document.createElement("div");
-    Object.assign(fileRow.style, { marginBottom: "8px" });
-    
-    const fileNameLabel = document.createElement("div");
-    Object.assign(fileNameLabel.style, {
-        fontSize: "10px",
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: "rgba(200,200,200,0.7)",
-        marginBottom: "2px",
-    });
-    fileNameLabel.textContent = "File";
-    
-    const fileNameValue = document.createElement("div");
-    Object.assign(fileNameValue.style, {
-        fontSize: "12px",
-        color: "#f0f0f0",
-        wordBreak: "break-word",
-    });
-    
-    if (canEditMeta && currentUser && (currentUser.is_admin === true || (Array.isArray(currentUser.groups) && currentUser.groups.includes("admin")))) {
-        // Admin can edit filename
-        const fileNameInput = document.createElement("input");
-        fileNameInput.type = "text";
-        fileNameInput.value = filename || relpath || "";
-        Object.assign(fileNameInput.style, {
-            width: "100%",
-            padding: "4px 6px",
-            borderRadius: "6px",
-            border: "1px solid rgba(255,255,255,0.18)",
-            background: "rgba(0,0,0,0.25)",
-            color: "#e5e7eb",
-            fontSize: "12px",
-            outline: "none",
+    // Helper function to create editable field with pencil icon
+    const createEditableField = (label, value, isAdmin, onSave) => {
+        const row = document.createElement("div");
+        Object.assign(row.style, { marginBottom: "8px" });
+        
+        const labelRow = document.createElement("div");
+        Object.assign(labelRow.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            marginBottom: "2px",
         });
-        fileNameInput.onchange = async () => {
-            const newName = fileNameInput.value.trim();
-            if (newName && newName !== filename) {
+        
+        const labelEl = document.createElement("div");
+        Object.assign(labelEl.style, {
+            fontSize: "10px",
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "rgba(200,200,200,0.7)",
+        });
+        labelEl.textContent = label;
+        labelRow.appendChild(labelEl);
+        
+        // Pencil icon (only for admins)
+        let pencilIcon = null;
+        let valueDisplay = null;
+        let valueInput = null;
+        let isEditing = false;
+        
+        if (isAdmin) {
+            pencilIcon = document.createElement("span");
+            pencilIcon.textContent = "✏️";
+            Object.assign(pencilIcon.style, {
+                fontSize: "10px",
+                cursor: "pointer",
+                opacity: "0.6",
+                transition: "opacity 0.2s",
+                userSelect: "none",
+            });
+            pencilIcon.onmouseenter = () => {
+                pencilIcon.style.opacity = "1";
+            };
+            pencilIcon.onmouseleave = () => {
+                if (!isEditing) {
+                    pencilIcon.style.opacity = "0.6";
+                }
+            };
+            pencilIcon.onclick = () => {
+                if (!isEditing) {
+                    isEditing = true;
+                    pencilIcon.style.opacity = "1";
+                    valueDisplay.style.display = "none";
+                    valueInput.style.display = "block";
+                    valueInput.focus();
+                    valueInput.select();
+                }
+            };
+            labelRow.appendChild(pencilIcon);
+        }
+        
+        const valueContainer = document.createElement("div");
+        Object.assign(valueContainer.style, {
+            position: "relative",
+        });
+        
+        // Display value (read-only)
+        valueDisplay = document.createElement("div");
+        Object.assign(valueDisplay.style, {
+            fontSize: "12px",
+            color: "#f0f0f0",
+            wordBreak: "break-word",
+            padding: "4px 0",
+        });
+        valueDisplay.textContent = value || "—";
+        valueContainer.appendChild(valueDisplay);
+        
+        // Input field (hidden by default, shown when editing)
+        if (isAdmin) {
+            valueInput = document.createElement("input");
+            valueInput.type = "text";
+            valueInput.value = value || "";
+            Object.assign(valueInput.style, {
+                width: "100%",
+                padding: "4px 6px",
+                borderRadius: "6px",
+                border: "1px solid rgba(255,255,255,0.18)",
+                background: "rgba(0,0,0,0.25)",
+                color: "#e5e7eb",
+                fontSize: "12px",
+                outline: "none",
+                display: "none",
+            });
+            
+            valueInput.onblur = () => {
+                isEditing = false;
+                pencilIcon.style.opacity = "0.6";
+                const newValue = valueInput.value.trim();
+                if (newValue !== value) {
+                    onSave(newValue);
+                } else {
+                    valueDisplay.style.display = "block";
+                    valueInput.style.display = "none";
+                }
+            };
+            
+            valueInput.onkeydown = (ev) => {
+                if (ev.key === "Enter") {
+                    valueInput.blur();
+                } else if (ev.key === "Escape") {
+                    valueInput.value = value || "";
+                    valueInput.blur();
+                }
+            };
+            
+            valueContainer.appendChild(valueInput);
+        }
+        
+        row.appendChild(labelRow);
+        row.appendChild(valueContainer);
+        return row;
+    };
+    
+    // File name (editable for admins)
+    // Use relpath if available (includes subdirectory), otherwise fall back to filename
+    const fileKey = relpath || filename;
+    const fileRow = createEditableField(
+        "File",
+        filename || relpath || "—",
+        isAdmin,
+        async (newName) => {
+            if (newName && newName !== (filename || relpath)) {
                 try {
-                    await galleryApi.renameFile(filename, newName);
+                    // Use relpath if available, otherwise use filename
+                    const response = await galleryApi.renameFile(fileKey, newName);
+                    
                     // Update current image info
+                    // Use the new_filename from response if available (includes relpath), otherwise construct it
+                    const newRelpath = response?.new_filename || (relpath ? `${relpath.split('/').slice(0, -1).join('/')}/${newName}`.replace(/^\/+/, '') : newName);
                     currentImageInfo.filename = newName;
-                    currentImageInfo.relpath = newName;
+                    currentImageInfo.relpath = newRelpath;
+                    
                     // Reload metadata
-                    fillMetadata(currentImageInfo, currentImageInfo.history_key || computeHistoryKey(currentImageInfo));
+                    fillMetadata(currentImageInfo);
                 } catch (err) {
                     console.error("[UsgromanaGallery] Failed to rename file:", err);
                     alert("Failed to rename file: " + (err.message || "Unknown error"));
-                    fileNameInput.value = filename || relpath || "";
                 }
             }
-        };
-        fileNameValue.appendChild(fileNameInput);
-    } else {
-        fileNameValue.textContent = filename || relpath || "—";
-    }
-    
-    fileRow.appendChild(fileNameLabel);
-    fileRow.appendChild(fileNameValue);
+        }
+    );
     metaContent.appendChild(fileRow);
     addRow("Modified", dateStr);
     addRow("Size", sizeStr);
     addRow("Folder", folder || "Unsorted");
-    addRow("Workflow", workflow_id || "—");
-    addRow("Model", model || model_name || "—");
-    addRow("Sampler", sampler || "—");
-    addRow("Prompt", (full_prompt || prompt || "—"));
     
-    // NSFW indicator - check if image is marked as NSFW
+    // Get extracted metadata from saved meta (load once, use for both display and NSFW check)
+    const metaKey = relpath || filename;
+    const savedMeta = await getSavedMeta(metaKey);
+    
+    // Display basic image info (Width, Height, Format, MimeType)
+    if (savedMeta.fileinfo) {
+        const fileinfo = savedMeta.fileinfo;
+        if (fileinfo.width !== undefined) {
+            addRow("Width", String(fileinfo.width));
+        }
+        if (fileinfo.height !== undefined) {
+            addRow("Height", String(fileinfo.height));
+        }
+        if (fileinfo.format) {
+            addRow("Format", fileinfo.format);
+        }
+        if (fileinfo.mimetype) {
+            addRow("MimeType", fileinfo.mimetype);
+        }
+    }
+    
+    // Display extracted generation parameters (editable for admins)
+    if (savedMeta.steps !== undefined) {
+        const stepsRow = createEditableField(
+            "Steps",
+            String(savedMeta.steps || ""),
+            isAdmin,
+            async (newValue) => {
+                const numValue = parseInt(newValue, 10);
+                if (!isNaN(numValue)) {
+                    await galleryApi.saveMetadata(metaKey, { steps: numValue });
+                    metaCache.set(metaKey, { ...savedMeta, steps: numValue });
+                }
+            }
+        );
+        metaContent.appendChild(stepsRow);
+    }
+    
+    if (savedMeta.cfg_scale !== undefined) {
+        const cfgRow = createEditableField(
+            "CFG Scale",
+            String(savedMeta.cfg_scale || ""),
+            isAdmin,
+            async (newValue) => {
+                const numValue = parseFloat(newValue);
+                if (!isNaN(numValue)) {
+                    await galleryApi.saveMetadata(metaKey, { cfg_scale: numValue });
+                    metaCache.set(metaKey, { ...savedMeta, cfg_scale: numValue });
+                }
+            }
+        );
+        metaContent.appendChild(cfgRow);
+    }
+    
+    if (savedMeta.seed !== undefined) {
+        const seedRow = createEditableField(
+            "Seed",
+            String(savedMeta.seed || ""),
+            isAdmin,
+            async (newValue) => {
+                const numValue = parseInt(newValue, 10);
+                if (!isNaN(numValue)) {
+                    await galleryApi.saveMetadata(metaKey, { seed: numValue });
+                    metaCache.set(metaKey, { ...savedMeta, seed: numValue });
+                }
+            }
+        );
+        metaContent.appendChild(seedRow);
+    }
+    
+    if (savedMeta.scheduler) {
+        const schedulerRow = createEditableField(
+            "Scheduler",
+            savedMeta.scheduler || "",
+            isAdmin,
+            async (newValue) => {
+                await galleryApi.saveMetadata(metaKey, { scheduler: newValue });
+                metaCache.set(metaKey, { ...savedMeta, scheduler: newValue });
+            }
+        );
+        metaContent.appendChild(schedulerRow);
+    }
+    
+    if (savedMeta.loras && Array.isArray(savedMeta.loras) && savedMeta.loras.length > 0) {
+        const loraList = savedMeta.loras.map(l => `${l.name} (${l.model_strength || 'N/A'}/${l.clip_strength || 'N/A'})`).join(", ");
+        addRow("LoRAs", loraList);
+    }
+    
+    // Display model and sampler (editable for admins)
+    const modelRow = createEditableField(
+        "Model",
+        savedMeta.model || model || model_name || "",
+        isAdmin,
+        async (newValue) => {
+            await galleryApi.saveMetadata(metaKey, { model: newValue });
+            metaCache.set(metaKey, { ...savedMeta, model: newValue });
+        }
+    );
+    metaContent.appendChild(modelRow);
+    
+    const samplerRow = createEditableField(
+        "Sampler",
+        savedMeta.sampler || sampler || "",
+        isAdmin,
+        async (newValue) => {
+            await galleryApi.saveMetadata(metaKey, { sampler: newValue });
+            metaCache.set(metaKey, { ...savedMeta, sampler: newValue });
+        }
+    );
+    metaContent.appendChild(samplerRow);
+    
+    // Display prompts (editable for admins)
+    if (savedMeta.positive_prompt) {
+        const posPromptRow = createEditableField(
+            "Positive Prompt",
+            savedMeta.positive_prompt || "",
+            isAdmin,
+            async (newValue) => {
+                await galleryApi.saveMetadata(metaKey, { positive_prompt: newValue });
+                metaCache.set(metaKey, { ...savedMeta, positive_prompt: newValue });
+            }
+        );
+        metaContent.appendChild(posPromptRow);
+    }
+    
+    if (savedMeta.negative_prompt) {
+        const negPromptRow = createEditableField(
+            "Negative Prompt",
+            savedMeta.negative_prompt || "",
+            isAdmin,
+            async (newValue) => {
+                await galleryApi.saveMetadata(metaKey, { negative_prompt: newValue });
+                metaCache.set(metaKey, { ...savedMeta, negative_prompt: newValue });
+            }
+        );
+        metaContent.appendChild(negPromptRow);
+    }
+    
+    // Fallback to full prompt if structured prompts not available
+    if (!savedMeta.positive_prompt && !savedMeta.negative_prompt) {
+        const promptRow = createEditableField(
+            "Prompt",
+            (full_prompt || prompt || ""),
+            isAdmin,
+            async (newValue) => {
+                await galleryApi.saveMetadata(metaKey, { prompt: newValue });
+                metaCache.set(metaKey, { ...savedMeta, prompt: newValue });
+            }
+        );
+        metaContent.appendChild(promptRow);
+    }
+    
+    // Display workflow ID if available (read-only)
+    if (workflow_id) {
+        addRow("Workflow ID", workflow_id);
+    }
+    
+    // NSFW indicator - check if image is marked as NSFW by the NSFW Guard
+    // This should display the actual NSFW status from the guard, not just blocking status
     try {
-        const savedMeta = await getSavedMeta(filename);
-        if (savedMeta.is_nsfw === true) {
+        // Check UsgromanaNSFW tag first (from PNG text chunks), then fallback to is_nsfw
+        const isNSFW = savedMeta && (
+            savedMeta.usgromana_nsfw === true || 
+            savedMeta.is_nsfw === true
+        );
+        
+        if (isNSFW) {
+            const nsfwRow = document.createElement("div");
+            Object.assign(nsfwRow.style, {
+                marginTop: "8px",
+                marginBottom: "8px",
+            });
+            
+            const nsfwLabel = document.createElement("div");
+            Object.assign(nsfwLabel.style, {
+                fontSize: "10px",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                color: "rgba(200,200,200,0.7)",
+                marginBottom: "2px",
+            });
+            nsfwLabel.textContent = "Content Warning";
+            
             const nsfwBadge = document.createElement("div");
             Object.assign(nsfwBadge.style, {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "4px",
-                padding: "2px 8px",
-                borderRadius: "4px",
-                background: "rgba(220,38,38,0.2)",
-                border: "1px solid rgba(220,38,38,0.6)",
+                padding: "4px 10px",
+                borderRadius: "6px",
+                background: "rgba(220,38,38,0.25)",
+                border: "1px solid rgba(220,38,38,0.7)",
                 color: "#fca5a5",
-                fontSize: "10px",
+                fontSize: "11px",
                 fontWeight: "600",
                 textTransform: "uppercase",
-                marginTop: "4px",
-                marginBottom: "8px",
             });
             nsfwBadge.textContent = "⚠️ NSFW";
-            metaContent.appendChild(nsfwBadge);
+            
+            nsfwRow.appendChild(nsfwLabel);
+            nsfwRow.appendChild(nsfwBadge);
+            metaContent.appendChild(nsfwRow);
         }
     } catch (err) {
-        // Ignore errors checking NSFW status
+        // Log errors for debugging
+        console.warn("[UsgromanaGallery] Error checking NSFW status:", err);
     }
 
     // Editable metadata (only if allowed)
@@ -866,10 +1211,15 @@ async function fillMetadata(imgInfo, historyKey) {
                 userSelect: "none",
             });
             if (canEditMeta) {
-                star.onclick = () => {
+                star.onclick = async () => {
                     imgInfo.rating = s;
                     renderStars();
-                    persistMetadata();
+                    await persistMetadata();
+                    // Notify grid to update rating display
+                    if (window.__USG_GALLERY_UPDATE_RATING__) {
+                        const key = imgInfo.relpath || imgInfo.filename;
+                        window.__USG_GALLERY_UPDATE_RATING__(key, s);
+                    }
                 };
             }
             starsRow.appendChild(star);
@@ -878,46 +1228,178 @@ async function fillMetadata(imgInfo, historyKey) {
     renderStars();
     editBox.appendChild(starsRow);
 
-    const baseInputStyle = {
-        width: "100%",
-        padding: "6px 8px",
-        borderRadius: "8px",
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "rgba(0,0,0,0.25)",
-        color: "#e5e7eb",
-        marginBottom: "8px",
-        outline: "none",
-    };
+    // Display name (editable with pencil icon)
+    const displayNameRow = createEditableField(
+        "Display name",
+        display_name || "",
+        canEditMeta,
+        (newValue) => {
+            imgInfo.display_name = newValue || null;
+            persistMetadata();
+            // Update display immediately
+            const displayEl = displayNameRow.querySelector("div[style*='wordBreak']");
+            if (displayEl) {
+                displayEl.textContent = newValue || "—";
+            }
+        }
+    );
+    editBox.appendChild(displayNameRow);
 
-    // Display name
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.value = display_name || "";
-    nameInput.placeholder = "Display name…";
-    nameInput.disabled = !canEditMeta;
-    Object.assign(nameInput.style, baseInputStyle);
-    nameInput.onchange = () => {
-        imgInfo.display_name = nameInput.value || null;
-        persistMetadata();
+    // Tags (editable with pencil icon) - display as colored pills
+    const tagsArray = Array.isArray(tags) ? tags : (typeof tags === 'string' ? tags.split(',').map(t => t.trim()).filter(Boolean) : []);
+    const tagsValue = tagsArray.join(", ");
+    
+    // Helper function to create tag pills
+    const createTagPills = (tagArray) => {
+        const container = document.createElement("div");
+        Object.assign(container.style, {
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px",
+            alignItems: "center",
+        });
+        
+        if (tagArray.length === 0) {
+            const empty = document.createElement("span");
+            empty.textContent = "—";
+            empty.style.color = "rgba(200,200,200,0.5)";
+            container.appendChild(empty);
+        } else {
+            tagArray.forEach(tag => {
+                const pill = document.createElement("span");
+                pill.textContent = tag;
+                Object.assign(pill.style, {
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "3px 10px",
+                    borderRadius: "12px",
+                    fontSize: "11px",
+                    fontWeight: "500",
+                    background: "rgba(99, 102, 241, 0.2)",
+                    border: "1px solid rgba(99, 102, 241, 0.4)",
+                    color: "#a5b4fc",
+                    whiteSpace: "nowrap",
+                });
+                container.appendChild(pill);
+            });
+        }
+        
+        return container;
     };
-    editBox.appendChild(nameInput);
-
-    // Tags
-    const tagsInput = document.createElement("input");
-    tagsInput.type = "text";
-    tagsInput.value = Array.isArray(tags) ? tags.join(", ") : "";
-    tagsInput.placeholder = "tags, comma, separated";
-    tagsInput.disabled = !canEditMeta;
-    Object.assign(tagsInput.style, baseInputStyle);
-    tagsInput.onchange = () => {
-        const arr = (tagsInput.value || "")
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean);
-        imgInfo.tags = arr;
-        persistMetadata();
-    };
-    editBox.appendChild(tagsInput);
+    
+    // Create custom editable field for tags with pill display
+    const tagsRow = document.createElement("div");
+    Object.assign(tagsRow.style, { marginBottom: "8px" });
+    
+    const labelRow = document.createElement("div");
+    Object.assign(labelRow.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        marginBottom: "2px",
+    });
+    
+    const labelEl = document.createElement("div");
+    Object.assign(labelEl.style, {
+        fontSize: "10px",
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        color: "rgba(200,200,200,0.7)",
+    });
+    labelEl.textContent = "Tags";
+    labelRow.appendChild(labelEl);
+    
+    // Pencil icon (only for admins)
+    let pencilIcon = null;
+    let valueDisplay = null;
+    let valueInput = null;
+    let isEditing = false;
+    
+    if (canEditMeta) {
+        pencilIcon = document.createElement("span");
+        pencilIcon.textContent = "✏️";
+        Object.assign(pencilIcon.style, {
+            fontSize: "10px",
+            cursor: "pointer",
+            opacity: "0.6",
+            transition: "opacity 0.2s",
+            userSelect: "none",
+        });
+        pencilIcon.onmouseenter = () => {
+            pencilIcon.style.opacity = "1";
+        };
+        pencilIcon.onmouseleave = () => {
+            if (!isEditing) {
+                pencilIcon.style.opacity = "0.6";
+            }
+        };
+        pencilIcon.onclick = () => {
+            if (!isEditing) {
+                isEditing = true;
+                pencilIcon.style.opacity = "1";
+                valueDisplay.style.display = "none";
+                valueInput.style.display = "block";
+                valueInput.focus();
+                valueInput.select();
+            }
+        };
+        labelRow.appendChild(pencilIcon);
+    }
+    
+    const valueContainer = document.createElement("div");
+    Object.assign(valueContainer.style, {
+        position: "relative",
+    });
+    
+    // Display value as pills (read-only)
+    valueDisplay = createTagPills(tagsArray);
+    valueContainer.appendChild(valueDisplay);
+    
+    // Input field (hidden by default, shown when editing)
+    if (canEditMeta) {
+        valueInput = document.createElement("input");
+        valueInput.type = "text";
+        valueInput.value = tagsValue;
+        Object.assign(valueInput.style, {
+            width: "100%",
+            padding: "4px 6px",
+            borderRadius: "6px",
+            border: "1px solid rgba(255,255,255,0.18)",
+            background: "rgba(0,0,0,0.25)",
+            color: "#e5e7eb",
+            fontSize: "12px",
+            outline: "none",
+            display: "none",
+        });
+        
+        valueInput.onblur = () => {
+            isEditing = false;
+            pencilIcon.style.opacity = "0.6";
+            const newValue = valueInput.value.trim();
+            const arr = newValue ? newValue.split(",").map((t) => t.trim()).filter(Boolean) : [];
+            imgInfo.tags = arr;
+            persistMetadata();
+            // Update display with new pills
+            valueDisplay.remove();
+            valueDisplay = createTagPills(arr);
+            valueContainer.insertBefore(valueDisplay, valueInput);
+        };
+        
+        valueInput.onkeydown = (ev) => {
+            if (ev.key === "Enter") {
+                valueInput.blur();
+            } else if (ev.key === "Escape") {
+                valueInput.value = tagsValue;
+                valueInput.blur();
+            }
+        };
+        
+        valueContainer.appendChild(valueInput);
+    }
+    
+    tagsRow.appendChild(labelRow);
+    tagsRow.appendChild(valueContainer);
+    editBox.appendChild(tagsRow);
 
     // NSFW Mark Button (only if user can edit)
     if (canEditMeta) {
@@ -993,111 +1475,200 @@ async function fillMetadata(imgInfo, historyKey) {
 
     metaContent.appendChild(editBox);
 
-    // History strip (thumbs ONLY from state registry; never generates)
-    await buildHistoryStrip(imgInfo, historyKey);
+    // Add delete button for admins at the bottom
+    if (isAdmin) {
+        addDeleteButton(imgInfo);
+    }
 }
 
-async function buildHistoryStrip(imgInfo, historyKey) {
-    if (!historyContainer) return;
+function addDeleteButton(imgInfo) {
+    if (!metaContent || !imgInfo) return;
+    
+    // Create separator
+    const separator = document.createElement("div");
+    Object.assign(separator.style, {
+        marginTop: "16px",
+        marginBottom: "12px",
+        paddingTop: "12px",
+        borderTop: "1px solid rgba(255,255,255,0.12)",
+    });
+    
+    // Create delete button
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "🗑️ Delete Image";
+    Object.assign(deleteBtn.style, {
+        width: "100%",
+        padding: "10px 16px",
+        background: "rgba(220, 38, 38, 0.2)",
+        border: "1px solid rgba(220, 38, 38, 0.5)",
+        borderRadius: "6px",
+        color: "#fca5a5",
+        fontSize: "12px",
+        fontWeight: "600",
+        cursor: "pointer",
+        transition: "all 0.2s ease",
+    });
+    
+    deleteBtn.onmouseenter = () => {
+        deleteBtn.style.background = "rgba(220, 38, 38, 0.3)";
+        deleteBtn.style.borderColor = "rgba(220, 38, 38, 0.7)";
+    };
+    
+    deleteBtn.onmouseleave = () => {
+        deleteBtn.style.background = "rgba(220, 38, 38, 0.2)";
+        deleteBtn.style.borderColor = "rgba(220, 38, 38, 0.5)";
+    };
+    
+    deleteBtn.onclick = async (ev) => {
+        ev.stopPropagation();
+        
+        const filename = imgInfo.relpath || imgInfo.filename;
+        if (!filename) return;
+        
+        const confirmed = confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone.`);
+        if (!confirmed) return;
+        
+        try {
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = "Deleting...";
+            deleteBtn.style.opacity = "0.6";
+            deleteBtn.style.cursor = "not-allowed";
+            
+            await galleryApi.batchDelete([filename]);
+            
+            // Close details view
+            hideDetails();
+            
+            // Reload images in grid (triggered by file monitor or manual refresh)
+            // The grid should automatically update when the file is deleted
+        } catch (err) {
+            console.error("[UsgromanaGallery] Failed to delete image:", err);
+            alert(`Failed to delete image: ${err.message || "Unknown error"}`);
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = "🗑️ Delete Image";
+            deleteBtn.style.opacity = "1";
+            deleteBtn.style.cursor = "pointer";
+        }
+    };
+    
+    separator.appendChild(deleteBtn);
+    metaContent.appendChild(separator);
+}
 
-    // Only build when meta panel is visible
-    if (!metadataVisible) {
-        clearHistoryStrip();
-        return;
+// --------------------------
+// Zoom and drag functionality
+// --------------------------
+
+function setupZoomAndDrag() {
+    if (!imgEl || !cardEl) return;
+    
+    // Mouse wheel zoom
+    cardEl.addEventListener("wheel", handleWheel, { passive: false });
+    
+    // Mouse drag
+    imgEl.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+}
+
+function toggleZoomMode() {
+    zoomEnabled = !zoomEnabled;
+    
+    if (zoomEnabled) {
+        btnZoom.title = "Disable zoom and drag mode";
+        btnZoom.style.background = "rgba(99, 102, 241, 0.3)";
+        currentZoom = 1.0;
+        currentPanX = 0;
+        currentPanY = 0;
+        updateImageTransform();
+    } else {
+        btnZoom.title = "Zoom and drag mode";
+        btnZoom.style.background = "rgba(0, 0, 0, 0.1)";
+        resetZoomAndDrag();
     }
+}
 
-    clearHistoryStrip();
-
-    const key = historyKey || imgInfo.history_key || computeHistoryKey(imgInfo);
-    if (!key) return;
-
-    const items = getImages();
-    if (!Array.isArray(items) || items.length === 0) return;
-
-    // Candidate pruning: workflow_id first, else stem
-    const wf = imgInfo.workflow_id || null;
-    const stem = computeStem(imgInfo.relpath || imgInfo.filename || "");
-
-    const candidates = items.filter((it) => {
-        if (!it) return false;
-        if (wf && it.workflow_id === wf) return true;
-        const s2 = computeStem(it.relpath || it.filename || "");
-        return stem && s2 === stem;
-    });
-
-    // Load meta for candidates (bounded)
-    const selected = [];
-    for (let i = 0; i < candidates.length && selected.length < PERFORMANCE.HISTORY_MAX; i++) {
-        const it = candidates[i];
-        const meta = await getSavedMeta(it.filename);
-        const itKey = meta.history_key || it.history_key || computeHistoryKey({ ...it, ...meta });
-        if (itKey === key) selected.push(it);
+function resetZoomAndDrag() {
+    zoomEnabled = false;
+    currentZoom = 1.0;
+    currentPanX = 0;
+    currentPanY = 0;
+    isDragging = false;
+    
+    if (btnZoom) {
+        btnZoom.title = "Zoom and drag mode";
+        btnZoom.style.background = "rgba(0, 0, 0, 0.1)";
     }
-
-    if (selected.length <= 1) return;
-
-    selected.sort((a, b) => (a.mtime || 0) - (b.mtime || 0));
-
-    historyContainer.style.display = "block";
-    historyContainer.innerHTML = "";
-
-    const hdr = document.createElement("div");
-    hdr.textContent = "History";
-    Object.assign(hdr.style, {
-        fontSize: "10px",
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: "rgba(200,200,200,0.7)",
-        marginBottom: "8px",
-    });
-    historyContainer.appendChild(hdr);
-
-    const wrap = document.createElement("div");
-    Object.assign(wrap.style, {
-        display: "flex",
-        gap: "6px",
-        flexWrap: "wrap",
-    });
-
-    selected.forEach((it) => {
-        const thumb = document.createElement("img");
-        thumb.loading = "lazy";
-        thumb.decoding = "async";
-
-        // THUMBS ONLY: state registry first, then existing thumb_url. No backend generation.
-        const itKey = getImageKey(it);
-        const thumbUrl = (itKey && getThumbnail(itKey)) || it.thumb_url || null;
-
-        if (!thumbUrl) return; // skip if grid hasn't registered it yet
-
-        thumb.dataset.src = thumbUrl;
-        Object.assign(thumb.style, {
-            width: "64px",
-            height: "64px",
-            objectFit: "cover",
-            borderRadius: "8px",
-            cursor: "pointer",
-            border:
-                it.filename === imgInfo.filename
-                    ? "2px solid rgba(255,216,107,0.9)"
-                    : "1px solid rgba(255,255,255,0.12)",
-        });
-
-        thumb.onclick = () => {
-            const idx = items.findIndex((x) => x && x.filename === it.filename);
-            if (idx >= 0) showDetailsForIndex(idx);
-        };
-
-        wrap.appendChild(thumb);
-    });
-
-    // If nothing was added, hide it
-    if (!wrap.childElementCount) {
-        historyContainer.style.display = "none";
-        historyContainer.innerHTML = "";
-        return;
+    
+    if (imgEl) {
+        imgEl.style.transform = "scale(1) translate(0, 0)";
     }
+}
 
-    historyContainer.appendChild(wrap);
-    setupHistoryLazyLoading(historyContainer);
+function handleWheel(ev) {
+    if (!zoomEnabled || !imgEl) return;
+    
+    ev.preventDefault();
+    ev.stopPropagation();
+    
+    const delta = ev.deltaY > 0 ? -0.1 : 0.1;
+    const newZoom = Math.max(0.5, Math.min(5.0, currentZoom + delta));
+    
+    if (newZoom !== currentZoom) {
+        // Calculate zoom point relative to image
+        const rect = imgEl.getBoundingClientRect();
+        const x = ev.clientX - rect.left - rect.width / 2;
+        const y = ev.clientY - rect.top - rect.height / 2;
+        
+        // Adjust pan to zoom towards mouse position
+        const zoomFactor = newZoom / currentZoom;
+        currentPanX = currentPanX * zoomFactor - x * (zoomFactor - 1);
+        currentPanY = currentPanY * zoomFactor - y * (zoomFactor - 1);
+        
+        currentZoom = newZoom;
+        updateImageTransform();
+    }
+}
+
+function handleMouseDown(ev) {
+    if (!zoomEnabled || !imgEl || currentZoom <= 1.0) return;
+    
+    ev.preventDefault();
+    ev.stopPropagation();
+    
+    isDragging = true;
+    dragStartX = ev.clientX - currentPanX;
+    dragStartY = ev.clientY - currentPanY;
+    zoomStartPanX = currentPanX;
+    zoomStartPanY = currentPanY;
+    
+    imgEl.style.cursor = "grabbing";
+}
+
+function handleMouseMove(ev) {
+    if (!zoomEnabled || !isDragging || !imgEl) return;
+    
+    ev.preventDefault();
+    
+    currentPanX = ev.clientX - dragStartX;
+    currentPanY = ev.clientY - dragStartY;
+    
+    updateImageTransform();
+}
+
+function handleMouseUp(ev) {
+    if (!zoomEnabled || !imgEl) return;
+    
+    isDragging = false;
+    imgEl.style.cursor = zoomEnabled && currentZoom > 1.0 ? "grab" : "default";
+}
+
+function updateImageTransform() {
+    if (!imgEl) return;
+    
+    imgEl.style.transform = `scale(${currentZoom}) translate(${currentPanX / currentZoom}px, ${currentPanY / currentZoom}px)`;
+    
+    if (imgEl.style.cursor !== "grabbing") {
+        imgEl.style.cursor = zoomEnabled && currentZoom > 1.0 ? "grab" : "default";
+    }
 }

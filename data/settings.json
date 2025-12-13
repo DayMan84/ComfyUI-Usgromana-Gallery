@@ -2,7 +2,7 @@
   "masonryLayout": false,
   "enableDrag": false,
   "theme": "dark",
-  "showRatingInGrid": false,
+  "showRatingInGrid": true,
   "thumbSize": "md",
   "anchorToManagerBar": true,
   "showDividers": true,

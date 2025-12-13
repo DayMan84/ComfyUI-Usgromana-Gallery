@@ -58,5 +58,95 @@
   },
   "ComfyUI_00022_.png": {
     "history_key": "stem:ComfyUI_00022_"
+  },
+  "ComfyUI_temp_kszrx_00001_.png": {
+    "history_key": "stem:ComfyUI_temp_kszrx_00001_"
+  },
+  "RedHead_00019_.png": {
+    "history_key": "stem:RedHead_00019_"
+  },
+  "ComfyUI_temp_ghxuz_00001_.png": {
+    "history_key": "stem:ComfyUI_temp_ghxuz_00001_"
+  },
+  "ComfyUI_temp_ohmit_00009_.png": {
+    "history_key": "stem:ComfyUI_temp_ohmit_00009_"
+  },
+  "ComfyUI_temp_opikh_00001_.png": {
+    "history_key": "stem:ComfyUI_temp_opikh_00001_"
+  },
+  "ComfyUI_temp_xtlai_00009_.png": {
+    "history_key": "stem:ComfyUI_temp_xtlai_00009_"
+  },
+  "ComfyUI_temp_bimby_00003_.png": {
+    "history_key": "stem:ComfyUI_temp_bimby_00003_"
+  },
+  "ComfyUI_00018_.png": {
+    "history_key": "stem:ComfyUI_00018_"
+  },
+  "ComfyUI_00013_.png": {
+    "history_key": "stem:ComfyUI_00013_"
+  },
+  "1girl/ComfyUI_temp_bimby_00003_.png": {
+    "history_key": "stem:ComfyUI_temp_bimby_00003_"
+  },
+  "1girl/xComfyUI_00001_.png": {
+    "history_key": "stem:xComfyUI_00001_"
+  },
+  "backuped/RedHead_00001_.png": {
+    "history_key": "stem:RedHead_00001_"
+  },
+  "backuped/RedHead_00017_.png": {
+    "history_key": "stem:RedHead_00017_"
+  },
+  "BlackDressWoman.png": {
+    "tags": [
+      "Horror"
+    ],
+    "display_name": null,
+    "rating": 0,
+    "folder": "1girl",
+    "prompt": null,
+    "history_key": "stem:ComfyUI_temp_kszrx_00001_"
+  },
+  "1girl/BlackDressWoman_01.png": {
+    "tags": [
+      "Horror",
+      "dress",
+      "woman",
+      "1Girl"
+    ],
+    "display_name": "Black Dress Woman",
+    "rating": 3,
+    "folder": "1girl",
+    "prompt": null,
+    "history_key": null
+  },
+  "1girl/Skull_Candy.png": {
+    "history_key": "stem:ComfyUI_00020_",
+    "tags": [
+      "Horror",
+      "Dark",
+      "Skull",
+      "1Girl"
+    ],
+    "display_name": "Skull Candy",
+    "rating": 5,
+    "folder": "1girl",
+    "prompt": null
+  },
+  "c60ac4b8-543f-44e1-8706-11ea34c01a19/ComfyUI_00007_.png": {
+    "history_key": "stem:ComfyUI_00007_"
+  },
+  "c60ac4b8-543f-44e1-8706-11ea34c01a19/ComfyUI_00006_.png": {
+    "history_key": "stem:ComfyUI_00006_"
+  },
+  "c60ac4b8-543f-44e1-8706-11ea34c01a19/ComfyUI_00005_.png": {
+    "history_key": "stem:ComfyUI_00005_"
+  },
+  "c60ac4b8-543f-44e1-8706-11ea34c01a19/ComfyUI_00003_.png": {
+    "history_key": "stem:ComfyUI_00003_"
+  },
+  "4df64e0c-4014-493d-b322-facf4426e9ba/ComfyUI_00006_.png": {
+    "history_key": "stem:ComfyUI_00006_"
   }
 }
