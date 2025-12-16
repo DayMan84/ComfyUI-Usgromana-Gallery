@@ -38,6 +38,7 @@ let metaContent = null;
 
 
 let currentIndex = null;
+let currentFilteredIndex = null; // Track filtered index directly - never re-derive
 let currentImageUrl = null;
 let currentImageInfo = null;
 let metadataVisible = false;
@@ -437,37 +438,56 @@ function getFilteredImages() {
 function navigateRelative(delta) {
     const allItems = getImages();
     const filteredItems = getFilteredImages();
-    
-    if (!filteredItems.length) {
-        return;
-    }
-    
-    // Find current image in filtered list
-    let filteredIndex = -1;
-    if (currentIndex != null && currentIndex < allItems.length) {
+
+    if (!filteredItems.length) return;
+
+    // If we lost our filtered anchor, rebuild it once
+    if (currentFilteredIndex == null || currentFilteredIndex >= filteredItems.length) {
         const currentImg = allItems[currentIndex];
-        filteredIndex = filteredItems.findIndex(img => 
+        if (!currentImg) return;
+        
+        currentFilteredIndex = filteredItems.findIndex(img =>
             (img.relpath && currentImg.relpath && img.relpath === currentImg.relpath) ||
             (img.filename && currentImg.filename && img.filename === currentImg.filename)
         );
+        
+        // If not found, DO NOT guess — disable filtered nav
+        if (currentFilteredIndex < 0) {
+            currentFilteredIndex = null;
+            return;
+        }
     }
-    
-    if (filteredIndex < 0) {
-        filteredIndex = 0; // Fallback to first image if current not found
-    }
-    
+
+    // Calculate next filtered index with proper wrapping
     const len = filteredItems.length;
-    const nextFilteredIndex = ((filteredIndex + delta) % len + len) % len;
+    const nextFilteredIndex = (currentFilteredIndex + delta + len) % len;
+    
     const nextImage = filteredItems[nextFilteredIndex];
-    
-    // Find the index of this image in the full list
-    const nextIndex = allItems.findIndex(img =>
-        (img.relpath && nextImage.relpath && img.relpath === nextImage.relpath) ||
-        (img.filename && nextImage.filename && img.filename === nextImage.filename)
-    );
-    
+    if (!nextImage) {
+        // Invalid index - reset
+        currentFilteredIndex = null;
+        return;
+    }
+
+    // Find the index in allItems - prioritize relpath matching (more unique)
+    let nextIndex = -1;
+    if (nextImage.relpath) {
+        // Try relpath first (most unique)
+        nextIndex = allItems.findIndex(img => img.relpath === nextImage.relpath);
+    }
+    if (nextIndex < 0 && nextImage.filename) {
+        // Fallback to filename if relpath didn't match
+        nextIndex = allItems.findIndex(img => img.filename === nextImage.filename);
+    }
+
     if (nextIndex >= 0) {
+        // Update currentFilteredIndex BEFORE calling showDetailsForIndex
+        // This ensures showDetailsForIndex trusts it
+        currentFilteredIndex = nextFilteredIndex;
         showDetailsForIndex(nextIndex);
+    } else {
+        // Failed to find in allItems - reset filtered index
+        currentFilteredIndex = null;
     }
 }
 
@@ -623,6 +643,23 @@ export async function showDetailsForIndex(index) {
     if (!stillCurrent()) return;
     await ensureHistoryMarker(imgInfo);
     if (!stillCurrent()) return;
+    
+    // Set filtered index once when opening - only if not already set (from navigation)
+    // If already set and valid, TRUST IT - don't recalculate (this prevents index drift)
+    const filteredItems = getFilteredImages();
+    if (currentFilteredIndex == null || currentFilteredIndex >= filteredItems.length || currentFilteredIndex < 0) {
+        // Not set or invalid - find it
+        currentFilteredIndex = filteredItems.findIndex(img =>
+            (img.relpath && imgInfo.relpath && img.relpath === imgInfo.relpath) ||
+            (img.filename && imgInfo.filename && img.filename === imgInfo.filename)
+        );
+        
+        // If not found, DO NOT guess — disable filtered nav
+        if (currentFilteredIndex < 0) {
+            currentFilteredIndex = null;
+        }
+    }
+    // If currentFilteredIndex is already set and valid, trust it - don't recalculate
 
     // MAIN IMAGE: full-res only here (no thumb fallbacks)
     // Ensure we always use the full-size image, never thumbnails
@@ -970,21 +1007,11 @@ export async function showDetailsForIndex(index) {
     if (folderFilter) {
         // Use filtered images for navigation
         const filteredItems = getFilteredImages();
-        if (filteredItems.length > 0) {
-            // Find current image in filtered list
-            let filteredCurrentIndex = filteredItems.findIndex(img =>
-                (img.relpath && imgInfo.relpath && img.relpath === imgInfo.relpath) ||
-                (img.filename && imgInfo.filename && img.filename === imgInfo.filename)
-            );
-            
-            if (filteredCurrentIndex < 0) {
-                filteredCurrentIndex = 0;
-            }
-            
+        if (filteredItems.length > 0 && currentFilteredIndex != null) {
             const filteredLen = filteredItems.length;
             // Wrap around - if only one image, prev and next both point to it
-            const prevFilteredIndex = filteredLen > 0 ? (filteredCurrentIndex - 1 + filteredLen) % filteredLen : 0;
-            const nextFilteredIndex = filteredLen > 0 ? (filteredCurrentIndex + 1) % filteredLen : 0;
+            const prevFilteredIndex = filteredLen > 0 ? (currentFilteredIndex - 1 + filteredLen) % filteredLen : 0;
+            const nextFilteredIndex = filteredLen > 0 ? (currentFilteredIndex + 1) % filteredLen : 0;
             
             prev = filteredItems[prevFilteredIndex];
             next = filteredItems[nextFilteredIndex];
@@ -1092,16 +1119,19 @@ export async function showDetailsForIndex(index) {
 
 export function setFolderFilter(folderPath) {
     folderFilter = folderPath;
+    currentFilteredIndex = null; // Reset filtered index when filter changes
 }
 
 export function clearFolderFilter() {
     folderFilter = null;
+    currentFilteredIndex = null; // Reset filtered index when filter is cleared
 }
 
 export function hideDetails() {
     if (!modalEl) return;
     // Clear folder filter when hiding details
     folderFilter = null;
+    currentFilteredIndex = null; // Clear filtered index when closing
 
     // persistent overlay: do NOT remove from DOM
     modalEl.style.display = "none";

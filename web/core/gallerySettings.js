@@ -8,7 +8,7 @@ const STORAGE_KEY = STORAGE_KEYS.SETTINGS;
 const DEFAULT_SETTINGS = {
     masonryLayout: false,
     enableDrag: true,
-    theme: "dark",          // "dark" | "light"
+    theme: "dark",          // "dark" | "darkHighContrast" | "darkSubtle" | "light" | "lightSubtle" | "darkBlue"
     showRatingInGrid: true,
     thumbSize: "md",        // "sm" | "md" | "lg"
     anchorToManagerBar: false,

@@ -19,7 +19,8 @@ import {
 } from "../core/gallerySettings.js";
 import { galleryApi } from "../core/api.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
-import { debounce, unloadImage } from "../core/utils.js"; 
+import { debounce, unloadImage } from "../core/utils.js";
+import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js"; 
 
 let rootEl = null;
 let gridContentEl = null;
@@ -103,7 +104,7 @@ function ensureGalleryGridStyles() {
         }
         .usg-gallery-card:hover {
             transform: translateY(-2px) scale(1.01);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 6px 20px var(--usg-card-hover-shadow);
             z-index: 5;
         }
         .usg-gallery-scroll::-webkit-scrollbar {
@@ -111,11 +112,11 @@ function ensureGalleryGridStyles() {
             height: 8px;
         }
         .usg-gallery-scroll::-webkit-scrollbar-track {
-            background: rgba(10,10,15,0.10);
+            background: var(--usg-scrollbar-track);
             border-radius: 999px;
         }
         .usg-gallery-scroll::-webkit-scrollbar-thumb {
-            background: rgba(120,130,160,0.10);
+            background: var(--usg-scrollbar-thumb);
             border-radius: 999px;
         }
         .usg-gallery-divider {
@@ -128,11 +129,86 @@ function ensureGalleryGridStyles() {
             font-weight: 600;
             letter-spacing: 0.06em;
             text-transform: uppercase;
-            color: rgba(209,213,219,0.85);
-            border-bottom: 1px solid rgba(148,163,184,0.30);
+            color: var(--usg-divider-color);
+            border-bottom: 1px solid var(--usg-divider-border);
         }
     `;
     document.head.appendChild(style);
+}
+
+/**
+ * Apply theme colors to grid UI elements
+ */
+function applyThemeToGrid(theme) {
+    if (!rootEl) return;
+    
+    // Update CSS variables on root element
+    const root = rootEl.closest('.usg-gallery-panel') || document.documentElement;
+    root.style.setProperty('--usg-scrollbar-track', theme.scrollbarTrack);
+    root.style.setProperty('--usg-scrollbar-thumb', theme.scrollbarThumb);
+    root.style.setProperty('--usg-divider-color', theme.dividerColor);
+    root.style.setProperty('--usg-divider-border', theme.dividerBorder);
+    root.style.setProperty('--usg-card-hover-shadow', theme.cardHoverShadow);
+    
+    // Update filter bar colors
+    const filterBar = rootEl.querySelector('div[style*="display: flex"]');
+    if (filterBar) {
+        filterBar.style.color = theme.textTertiary;
+    }
+    
+    // Update search input
+    const searchInput = rootEl.querySelector('input[type="text"]');
+    if (searchInput) {
+        searchInput.style.border = `1px solid ${theme.inputBorder}`;
+        searchInput.style.background = theme.inputBackground;
+        searchInput.style.color = theme.inputText;
+    }
+    
+    // Update buttons
+    const buttons = rootEl.querySelectorAll('button');
+    buttons.forEach(btn => {
+        if (btn.id && btn.id.startsWith('usg-filter-btn-')) {
+            // Rating filter buttons
+            const isActive = btn.style.background.includes('180,180,255') || 
+                           btn.style.background.includes('rgba(180,180,255');
+            btn.style.border = `1px solid ${theme.cardBorder}`;
+            btn.style.background = isActive ? theme.buttonActiveBackground : theme.cardBackground;
+            btn.style.color = theme.textPrimary;
+        } else if (btn.textContent === 'Refresh' || btn.textContent.includes('Download Selected') || btn.textContent.includes('Delete Selected')) {
+            // Action buttons
+            if (btn.textContent.includes('Delete')) {
+                btn.style.border = `1px solid ${theme.dangerBorder}`;
+                btn.style.background = theme.dangerBackground;
+                btn.style.color = theme.dangerText;
+            } else {
+                btn.style.border = `1px solid ${theme.buttonBorder}`;
+                btn.style.background = theme.buttonBackground;
+                btn.style.color = theme.buttonText;
+            }
+        } else if (btn.textContent === 'Filters') {
+            // Filter toggle button
+            btn.style.border = `1px solid ${theme.buttonBorder}`;
+            btn.style.background = theme.cardBackground;
+            btn.style.color = theme.textPrimary;
+        }
+    });
+    
+    // Update loading indicator
+    const loadingIndicator = rootEl.querySelector('.usg-loading-indicator');
+    if (loadingIndicator) {
+        loadingIndicator.style.background = theme.filterBackground;
+        loadingIndicator.style.border = `1px solid ${theme.filterBorder}`;
+    }
+    
+    const statusEl = rootEl.querySelector('.usg-loading-status');
+    if (statusEl) {
+        statusEl.style.color = theme.textPrimary;
+    }
+    
+    const imageNameEl = rootEl.querySelector('.usg-loading-image-name');
+    if (imageNameEl) {
+        imageNameEl.style.color = theme.textSecondary;
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -458,6 +534,14 @@ export function initGrid(root) {
 
         renderGridContent();
     });
+    
+    // Subscribe to theme changes
+    subscribeTheme((theme) => {
+        applyThemeToGrid(theme);
+    });
+    
+    // Apply initial theme
+    applyThemeToGrid(getCurrentTheme());
 }
 
 // ---------------------------------------------------------------------
@@ -468,9 +552,10 @@ function buildStaticUI() {
     if (!rootEl) return;
     rootEl.innerHTML = "";
 
+    const theme = getCurrentTheme();
     const filterBar = document.createElement("div");
     Object.assign(filterBar.style, {
-        display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "#ddd",
+        display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: theme.textTertiary,
         marginBottom: "10px", flexShrink: "0", width: "100%", boxSizing: "border-box",
     });
 
@@ -481,8 +566,8 @@ function buildStaticUI() {
     searchInput.value = searchQuery;
     Object.assign(searchInput.style, {
         flex: "1", minWidth: "0", padding: "4px 8px", borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.28)", background: "rgba(15,23,42,0.38)",
-        color: "#e5e7eb", fontSize: "11px", outline: "none",
+        border: `1px solid ${theme.inputBorder}`, background: theme.inputBackground,
+        color: theme.inputText, fontSize: "11px", outline: "none",
     });
 
     searchInput.addEventListener("focus", () => { window.__USG_GALLERY_CAPTURE__ = true; });
@@ -510,11 +595,11 @@ function buildStaticUI() {
     refreshBtn.textContent = "Refresh";
     Object.assign(refreshBtn.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.6)",
+        border: `1px solid ${theme.buttonBorder}`,
         padding: "4px 10px",
         fontSize: "12px",
-        background: "rgba(15,23,42,0.9)",
-        color: "#e5e7eb",
+        background: theme.buttonBackground,
+        color: theme.buttonText,
         cursor: "pointer",
     });
     refreshBtn.onclick = () => {
@@ -528,11 +613,11 @@ function buildStaticUI() {
     batchDownloadBtn.style.display = "none";
     Object.assign(batchDownloadBtn.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.6)",
+        border: `1px solid ${theme.buttonBorder}`,
         padding: "4px 10px",
         fontSize: "12px",
-        background: "rgba(15,23,42,0.9)",
-        color: "#e5e7eb",
+        background: theme.buttonBackground,
+        color: theme.buttonText,
         cursor: "pointer",
         marginLeft: "6px",
     });
@@ -561,11 +646,11 @@ function buildStaticUI() {
     batchDeleteBtn.style.display = "none";
     Object.assign(batchDeleteBtn.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(220,38,38,0.6)",
+        border: `1px solid ${theme.dangerBorder}`,
         padding: "4px 10px",
         fontSize: "12px",
-        background: "rgba(220,38,38,0.2)",
-        color: "#fca5a5",
+        background: theme.dangerBackground,
+        color: theme.dangerText,
         cursor: "pointer",
         marginLeft: "6px",
     });
@@ -590,9 +675,9 @@ function buildStaticUI() {
         btn.dataset.minRating = String(opt.value);
         btn.id = `usg-filter-btn-${opt.value}`;
         Object.assign(btn.style, {
-            borderRadius: "999px", border: "1px solid rgba(255,255,255,0.15)",
+            borderRadius: "999px", border: `1px solid ${theme.cardBorder}`,
             padding: "2px 8px", fontSize: "11px", cursor: "pointer",
-            background: "rgba(10,10,15,0.5)", color: "#eee", opacity: "0.75", transition: "all 0.15s ease-out",
+            background: theme.cardBackground, color: theme.textPrimary, opacity: "0.75", transition: "all 0.15s ease-out",
         });
         btn.onclick = () => {
             minRatingFilter = Number(btn.dataset.minRating || "0");
@@ -606,9 +691,9 @@ function buildStaticUI() {
     filterToggleBtn = document.createElement("button");
     filterToggleBtn.textContent = "Filters";
     Object.assign(filterToggleBtn.style, {
-        borderRadius: "999px", border: "1px solid rgba(148,163,184,0.55)",
+        borderRadius: "999px", border: `1px solid ${theme.buttonBorder}`,
         padding: "2px 10px", fontSize: "11px", cursor: "pointer",
-        background: "rgba(10,10,15,0.6)", color: "#e5e7eb", opacity: "0.85",
+        background: theme.cardBackground, color: theme.textPrimary, opacity: "0.85",
         marginLeft: "6px", transition: "all 0.15s ease-out", display: "inline-flex",
         alignItems: "center", gap: "4px",
     });
@@ -660,7 +745,9 @@ function updateFilterButtons() {
         const btn = document.getElementById(`usg-filter-btn-${val}`);
         if (!btn) return;
         const isActive = val === minRatingFilter;
-        btn.style.background = isActive ? "rgba(180,180,255,0.18)" : "rgba(10,10,15,0.6)";
+        const theme = getCurrentTheme();
+        btn.style.background = isActive ? theme.buttonActiveBackground : theme.cardBackground;
+        btn.style.color = theme.textPrimary; // Ensure text color is always correct
         btn.style.opacity = isActive ? "1" : "0.75";
     });
 }
@@ -705,9 +792,15 @@ function createLoadingIndicator() {
     const statusEl = document.createElement("div");
     statusEl.className = "usg-loading-status";
     statusEl.textContent = "Loading images...";
+    const theme = getCurrentTheme();
+    Object.assign(loadingIndicatorEl.style, {
+        background: theme.filterBackground,
+        border: `1px solid ${theme.filterBorder}`,
+    });
+    
     Object.assign(statusEl.style, {
         fontSize: "16px",
-        color: "#e5e7eb",
+        color: theme.textPrimary,
         fontWeight: "600",
         textAlign: "center",
         marginBottom: "8px",
@@ -719,7 +812,7 @@ function createLoadingIndicator() {
     imageNameEl.textContent = "";
     Object.assign(imageNameEl.style, {
         fontSize: "12px",
-        color: "#94a3b8",
+        color: theme.textSecondary,
         textAlign: "center",
         marginBottom: "12px",
         maxWidth: "100%",
@@ -1059,6 +1152,7 @@ function createDividerElement(headerText, isPageHeader = false) {
     const styleKey = (gallerySettings && gallerySettings.dividerStyle) || "timeline";
     if (styleKey === "none") return null;
 
+    const theme = getCurrentTheme();
     const row = document.createElement("div");
     row.className = "usg-gallery-divider";
     const baseMargins = isPageHeader ? { marginTop: "0", marginBottom: "6px" } : { marginTop: "8px", marginBottom: "4px" };
@@ -1070,20 +1164,24 @@ function createDividerElement(headerText, isPageHeader = false) {
                 padding: "4px 0 2px", ...baseMargins,
             });
             const lineLeft = document.createElement("div");
-            Object.assign(lineLeft.style, { flex: "1", height: "1px", background: "rgba(148,163,184,0.35)", opacity: "0.7" });
+            Object.assign(lineLeft.style, { flex: "1", height: "1px", background: theme.dividerBorder, opacity: "0.7" });
             const label = document.createElement("span");
             label.textContent = headerText;
             Object.assign(label.style, {
-                padding: "2px 10px", borderRadius: "999px", border: "1px solid rgba(148,163,184,0.55)",
-                background: "rgba(15,23,42,0.88)", fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase",
+                padding: "2px 10px", borderRadius: "999px", border: `1px solid ${theme.buttonBorder}`,
+                background: theme.buttonBackground, color: theme.textPrimary, fontSize: "11px", 
+                letterSpacing: "0.06em", textTransform: "uppercase",
             });
             const lineRight = document.createElement("div");
-            Object.assign(lineRight.style, { flex: "1", height: "1px", background: "rgba(148,163,184,0.35)", opacity: "0.7" });
+            Object.assign(lineRight.style, { flex: "1", height: "1px", background: theme.dividerBorder, opacity: "0.7" });
             row.appendChild(lineLeft); row.appendChild(label); row.appendChild(lineRight);
             break;
         }
         case "label": {
-            Object.assign(row.style, { borderBottom: "none", paddingLeft: "4px", paddingTop: "4px", paddingBottom: "2px", ...baseMargins });
+            Object.assign(row.style, { 
+                borderBottom: "none", paddingLeft: "4px", paddingTop: "4px", paddingBottom: "2px", 
+                color: theme.dividerColor, ...baseMargins 
+            });
             row.textContent = headerText;
             break;
         }
@@ -1091,8 +1189,8 @@ function createDividerElement(headerText, isPageHeader = false) {
         default: {
             Object.assign(row.style, {
                 width: "100%", boxSizing: "border-box", padding: "6px 4px 2px", fontSize: "11px",
-                fontWeight: "600", letterSpacing: "0.06em", textTransform: "uppercase", color: "rgba(209,213,219,0.85)",
-                borderBottom: "1px solid rgba(148,163,184,0.30)", ...baseMargins,
+                fontWeight: "600", letterSpacing: "0.06em", textTransform: "uppercase", 
+                color: theme.dividerColor, borderBottom: `1px solid ${theme.dividerBorder}`, ...baseMargins,
             });
             row.textContent = headerText;
             break;
