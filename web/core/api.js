@@ -104,4 +104,64 @@ export const galleryApi = {
             body: JSON.stringify({ old_filename: oldFilename, new_filename: newFilename }),
         });
     },
+
+    async batchGenerateThumbnails(filenames = []) {
+        return await request("/batch/generate-thumbnails", {
+            method: "POST",
+            body: JSON.stringify({ filenames }),
+        });
+    },
+
+    async listFolder(path = "") {
+        const encodedPath = encodeURIComponent(path);
+        const data = await request(`/list-folder?path=${encodedPath}`);
+        return data;
+    },
+    async browseFolder(path = "") {
+        const encodedPath = encodeURIComponent(path);
+        const data = await request(`/browse-folder?path=${encodedPath}`);
+        return data;
+    },
+
+    async createFolder(parentPath, folderName) {
+        return await request("/create-folder", {
+            method: "POST",
+            body: JSON.stringify({ parentPath, folderName }),
+        });
+    },
+
+    async renameFolder(path, newName) {
+        return await request("/rename-folder", {
+            method: "POST",
+            body: JSON.stringify({ path, newName }),
+        });
+    },
+
+    async deleteFolder(path) {
+        return await request("/delete-folder", {
+            method: "POST",
+            body: JSON.stringify({ path }),
+        });
+    },
+
+    async deleteFile(path) {
+        return await request("/delete-file", {
+            method: "POST",
+            body: JSON.stringify({ path }),
+        });
+    },
+
+    async moveFile(filePath, targetFolderPath) {
+        return await request("/move-file", {
+            method: "POST",
+            body: JSON.stringify({ filePath, targetFolderPath }),
+        });
+    },
+
+    async moveFolder(folderPath, targetFolderPath) {
+        return await request("/move-folder", {
+            method: "POST",
+            body: JSON.stringify({ folderPath, targetFolderPath }),
+        });
+    },
 };

@@ -148,5 +148,25 @@
   },
   "4df64e0c-4014-493d-b322-facf4426e9ba/ComfyUI_00006_.png": {
     "history_key": "stem:ComfyUI_00006_"
+  },
+  "SavesAI/ComfyUI_temp_kszrx_00001_.png": {
+    "tags": [],
+    "display_name": null,
+    "rating": 4,
+    "folder": "SavesAI",
+    "prompt": null,
+    "history_key": null
+  },
+  "2339fc4b-6588-4769-81eb-876276ae70ad/Batman!.png": {
+    "tags": [
+      "Comic",
+      "art",
+      "JimLee"
+    ],
+    "display_name": null,
+    "rating": 5,
+    "folder": "2339fc4b-6588-4769-81eb-876276ae70ad",
+    "prompt": null,
+    "history_key": null
   }
 }

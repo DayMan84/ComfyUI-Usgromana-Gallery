@@ -38,6 +38,32 @@ def get_output_dir() -> str:
     return folder_paths.get_output_directory()
 
 
+def get_gallery_root_dir() -> str:
+    """
+    Return the root gallery directory.
+    Checks settings for custom rootGalleryFolder, otherwise uses default output directory.
+    """
+    # Try to load settings to check for custom root folder
+    try:
+        _EXTENSION_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _DATA_DIR = os.path.join(_EXTENSION_DIR, "data")
+        settings_file = os.path.join(_DATA_DIR, "settings.json")
+        
+        if os.path.exists(settings_file):
+            import json
+            with open(settings_file, "r", encoding="utf-8") as f:
+                settings = json.load(f) or {}
+                custom_root = settings.get("rootGalleryFolder", "").strip()
+                if custom_root and os.path.isdir(custom_root):
+                    return os.path.abspath(custom_root)
+    except Exception:
+        # If anything fails, fall back to default
+        pass
+    
+    # Default: use ComfyUI output directory
+    return get_output_dir()
+
+
 def _is_image_file(name: str, extensions: set[str] | None = None) -> bool:
     """Check if file has a valid image extension."""
     _, ext = os.path.splitext(name)
@@ -54,7 +80,7 @@ def list_output_images(limit: int | None = None, extensions: set[str] | None = N
         limit: Maximum number of images to return
         extensions: Set of file extensions to include (defaults to IMAGE_EXTENSIONS)
     """
-    root = get_output_dir()
+    root = get_gallery_root_dir()
     if not os.path.isdir(root):
         return []
 
@@ -62,8 +88,17 @@ def list_output_images(limit: int | None = None, extensions: set[str] | None = N
     exts = extensions or IMAGE_EXTENSIONS
 
     for dirpath, dirnames, filenames in os.walk(root):
+        # Skip thumbnail directories
+        if "_thumbs" in dirpath:
+            continue
+            
         for fname in filenames:
             if not _is_image_file(fname, exts):
+                continue
+            
+            # Skip thumbnail files (they're in _thumbs directory, but also skip if filename suggests it's a thumb)
+            # Thumbnails are served separately and shouldn't appear in main gallery
+            if fname.startswith("thumb_") or "_thumb" in fname.lower():
                 continue
 
             full_path = os.path.join(dirpath, fname)

@@ -29,6 +29,9 @@ const DEFAULT_SETTINGS = {
     fileExtensions: ".png,.jpg,.jpeg,.webp,.gif,.bmp", // Comma-separated list
     usePollingObserver: false, // Use polling instead of native file watcher
     enableRealTimeUpdates: true, // Enable real-time file monitoring
+    
+    // Root gallery folder (empty = use default ComfyUI output directory)
+    rootGalleryFolder: "", // Custom path to gallery root folder
 };
 
 let settings = loadSettingsFromStorage();

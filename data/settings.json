@@ -1,19 +1,20 @@
 {
-  "masonryLayout": false,
-  "enableDrag": false,
+  "masonryLayout": true,
+  "enableDrag": true,
   "theme": "dark",
-  "showRatingInGrid": true,
-  "thumbSize": "md",
+  "showRatingInGrid": false,
+  "thumbSize": "lg",
   "anchorToManagerBar": true,
-  "showDividers": true,
-  "dividerMode": "month",
+  "showDividers": false,
+  "dividerMode": "folder",
   "dividerStyle": "pill",
-  "arrangeBy": "none",
+  "arrangeBy": "size",
   "sortAscending": true,
   "openButtonBoxQuery": ".actionbar-container .comfyui-button-group:nth-of-type(2)",
   "fileExtensions": ".png,.jpg,.jpeg,.webp,.gif,.bmp",
   "usePollingObserver": true,
   "enableRealTimeUpdates": true,
   "showNSFW": false,
-  "dividerLayout": "page"
+  "dividerLayout": "page",
+  "rootGalleryFolder": ""
 }

@@ -3,17 +3,21 @@
 import { initGrid, clearGridThumbnails } from "./grid.js";
 import { resetGridHasSetVisibleImagesFlag } from "../core/state.js";
 import { initDetails, hideDetails } from "./details.js"; 
+import { initExplorer } from "./explorer.js";
 import {
     getGallerySettings,
     updateGallerySettings,
     subscribeGallerySettings,
 } from "../core/gallerySettings.js";
 import { ASSETS } from "../core/constants.js";
+import { galleryApi } from "../core/api.js";
 
 let overlayEl = null;
 let gridRootEl = null;
+let explorerRootEl = null;
 let initialized = false;
 let settingsModalEl = null;
+let currentViewMode = "grid"; // "grid" or "explorer"
 
 // Floating filter panel
 let filterPanelEl = null;
@@ -109,6 +113,31 @@ function ensureOverlay() {
         gap: "6px",
     });
 
+    // Explorer/Viewer toggle button
+    const explorerToggleButton = document.createElement("button");
+    explorerToggleButton.title = "Toggle between Explorer and Viewer mode";
+    let isExplorerMode = false;
+    Object.assign(explorerToggleButton.style, {
+        borderRadius: "999px",
+        border: "1px solid rgba(148,163,184,0.55)",
+        padding: "4px 10px",
+        fontSize: "11px",
+        cursor: "pointer",
+        background: "rgba(15,23,42,0.8)",
+        color: "#e5e7eb",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+    });
+    explorerToggleButton.textContent = "Explorer";
+    explorerToggleButton.onclick = () => {
+        isExplorerMode = !isExplorerMode;
+        explorerToggleButton.textContent = isExplorerMode ? "Viewer" : "Explorer";
+        currentViewMode = isExplorerMode ? "explorer" : "grid";
+        toggleViewMode(isExplorerMode);
+    };
+    rightHeader.appendChild(explorerToggleButton);
+
     // Settings button
     const settingsButton = document.createElement("button");
     settingsButton.title = "Gallery settings";
@@ -159,7 +188,7 @@ function ensureOverlay() {
     header.appendChild(rightHeader);
 
     // ---------------------------------------------------------------
-    // Content – single full-width grid
+    // Content – grid and explorer views
     // ---------------------------------------------------------------
     const content = document.createElement("div");
     Object.assign(content.style, {
@@ -167,6 +196,7 @@ function ensureOverlay() {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        position: "relative",
     });
 
     gridRootEl = document.createElement("div");
@@ -176,9 +206,23 @@ function ensureOverlay() {
         flexDirection: "column",
         minWidth: "0",
         minHeight: "0",
+        width: "100%",
+        height: "100%",
+    });
+
+    explorerRootEl = document.createElement("div");
+    Object.assign(explorerRootEl.style, {
+        padding: "10px",
+        display: "none",
+        flexDirection: "column",
+        minWidth: "0",
+        minHeight: "0",
+        width: "100%",
+        height: "100%",
     });
 
     content.appendChild(gridRootEl);
+    content.appendChild(explorerRootEl);
 
     panel.appendChild(header);
     panel.appendChild(content);
@@ -187,7 +231,7 @@ function ensureOverlay() {
     document.body.appendChild(overlayEl);
     ensureOverlayStyles();
 
-    // Init grid + details
+    // Init grid + explorer + details
     // Reset the gridHasSetVisibleImages flag on first overlay creation
     // This ensures images load properly when gallery is first opened
     if (typeof window !== 'undefined' && !window.__USG_GALLERY_OVERLAY_CREATED__) {
@@ -195,6 +239,7 @@ function ensureOverlay() {
         resetGridHasSetVisibleImagesFlag();
     }
     initGrid(gridRootEl);
+    initExplorer(explorerRootEl);
     initDetails(null); // details attaches its own modal
 
     // Theme/logo + remember last inline divider style
@@ -221,6 +266,17 @@ export function showOverlay() {
     const el = ensureOverlay();
     if (!el) return;
     el.style.display = "flex";
+    
+    // Reload images when overlay is shown (in case it was closed and reopened)
+    // Only reload if grid is initialized and images haven't been loaded recently
+    if (typeof window !== 'undefined' && window.__USG_GALLERY_GRID_INIT__) {
+        // Small delay to ensure overlay is visible first
+        setTimeout(() => {
+            if (window.USG_GALLERY_RELOAD_IMAGES) {
+                window.USG_GALLERY_RELOAD_IMAGES();
+            }
+        }, 100);
+    }
 }
 
 export function openGalleryOverlay() {
@@ -399,6 +455,121 @@ function openSettingsModal(panel) {
         extRow.appendChild(extInput);
         form.appendChild(extRow);
 
+        // Root gallery folder
+        const rootFolderRow = document.createElement("div");
+        Object.assign(rootFolderRow.style, {
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            marginTop: "4px",
+        });
+        const rootFolderLabel = document.createElement("span");
+        rootFolderLabel.textContent = "Root gallery folder (leave empty for default):";
+        
+        // Container for input and browse button
+        const rootFolderInputContainer = document.createElement("div");
+        Object.assign(rootFolderInputContainer.style, {
+            display: "flex",
+            gap: "6px",
+            alignItems: "stretch",
+        });
+        
+        const rootFolderInput = document.createElement("input");
+        rootFolderInput.type = "text";
+        rootFolderInput.value = current.rootGalleryFolder || "";
+        rootFolderInput.placeholder = "e.g., C:\\Users\\YourName\\Pictures or leave empty for default";
+        Object.assign(rootFolderInput.style, {
+            padding: "4px 8px",
+            borderRadius: "6px",
+            border: "1px solid rgba(148,163,184,0.35)",
+            background: "rgba(15,23,42,0.38)",
+            color: "#e5e7eb",
+            fontSize: "11px",
+            outline: "none",
+            flex: "1",
+            boxSizing: "border-box",
+        });
+        rootFolderInput.onchange = () => {
+            updateGallerySettings({ rootGalleryFolder: rootFolderInput.value.trim() });
+        };
+        
+        // Browse button
+        const browseButton = document.createElement("button");
+        browseButton.textContent = "Browse";
+        browseButton.title = "Browse for folder";
+        Object.assign(browseButton.style, {
+            padding: "4px 12px",
+            borderRadius: "6px",
+            border: "1px solid rgba(148,163,184,0.55)",
+            background: "rgba(15,23,42,0.85)",
+            color: "#e5e7eb",
+            fontSize: "11px",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            flexShrink: "0",
+        });
+        browseButton.onclick = async () => {
+            try {
+                // Use native system folder picker
+                if ('showDirectoryPicker' in window) {
+                    const directoryHandle = await window.showDirectoryPicker({
+                        mode: 'read',
+                        startIn: rootFolderInput.value ? 'directory' : 'documents',
+                    });
+                    
+                    // File System Access API doesn't expose full paths for security reasons
+                    // We need to prompt the user for the full path
+                    const folderName = directoryHandle.name;
+                    
+                    // Use the current input value as default if it exists and looks like a valid path
+                    // Otherwise, try to construct a reasonable default
+                    let defaultPath = rootFolderInput.value;
+                    
+                    // If current value doesn't look like a full path, try to construct one
+                    if (!defaultPath || (!defaultPath.includes('\\') && !defaultPath.includes('/'))) {
+                        // Try common Windows paths
+                        if (navigator.platform.toLowerCase().includes('win')) {
+                            // Try to get username from common locations
+                            defaultPath = `C:\\Users\\${folderName}`;
+                        } else {
+                            // Unix/Linux/Mac
+                            defaultPath = `/${folderName}`;
+                        }
+                    }
+                    
+                    // Prompt user for the full absolute path
+                    const fullPath = prompt(
+                        `Selected folder: "${folderName}"\n\nPlease enter the full absolute path to this folder:`,
+                        defaultPath
+                    );
+                    
+                    if (fullPath && fullPath.trim()) {
+                        rootFolderInput.value = fullPath.trim();
+                        updateGallerySettings({ rootGalleryFolder: fullPath.trim() });
+                    }
+                } else {
+                    // Fallback: Use custom folder picker if native picker not available
+                    openFolderPickerDialog(rootFolderInput);
+                }
+            } catch (err) {
+                // User cancelled or error occurred
+                if (err.name === 'AbortError') {
+                    // User cancelled, do nothing
+                    return;
+                }
+                
+                // Other error - fallback to custom picker
+                console.warn("[Gallery] Native folder picker error:", err);
+                openFolderPickerDialog(rootFolderInput);
+            }
+        };
+        
+        rootFolderInputContainer.appendChild(rootFolderInput);
+        rootFolderInputContainer.appendChild(browseButton);
+        rootFolderRow.appendChild(rootFolderLabel);
+        rootFolderRow.appendChild(rootFolderInputContainer);
+        form.appendChild(rootFolderRow);
+
         settingsModalEl.appendChild(form);
 
         const footer = document.createElement("div");
@@ -429,6 +600,335 @@ function openSettingsModal(panel) {
     }
 
     settingsModalEl.style.display = "block";
+}
+
+// -------------------------------------------------------------------
+// View mode toggle (Grid/Explorer)
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+// Folder Picker Dialog
+// -------------------------------------------------------------------
+
+function openFolderPickerDialog(inputElement) {
+    // Create modal overlay
+    const pickerModal = document.createElement("div");
+    Object.assign(pickerModal.style, {
+        position: "fixed",
+        inset: "0",
+        zIndex: "30000",
+        background: "rgba(0,0,0,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+    });
+
+    // Create dialog
+    const dialog = document.createElement("div");
+    Object.assign(dialog.style, {
+        background: "rgba(27, 27, 27, 0.95)",
+        borderRadius: "12px",
+        border: "1px solid rgba(94, 94, 94, 0.3)",
+        boxShadow: "0 18px 40px rgba(0,0,0,0.89)",
+        padding: "16px",
+        minWidth: "500px",
+        maxWidth: "700px",
+        maxHeight: "80vh",
+        color: "#e5e7eb",
+        display: "flex",
+        flexDirection: "column",
+    });
+
+    // Title
+    const title = document.createElement("div");
+    title.textContent = "Select Gallery Folder";
+    Object.assign(title.style, {
+        fontSize: "14px",
+        fontWeight: "600",
+        marginBottom: "12px",
+    });
+    dialog.appendChild(title);
+
+    // Current path display
+    const currentPathDisplay = document.createElement("div");
+    Object.assign(currentPathDisplay.style, {
+        padding: "8px",
+        marginBottom: "8px",
+        fontSize: "11px",
+        background: "rgba(15,23,42,0.4)",
+        borderRadius: "6px",
+        wordBreak: "break-all",
+        color: "#94a3b8",
+    });
+    dialog.appendChild(currentPathDisplay);
+
+    // Breadcrumb
+    const breadcrumb = document.createElement("div");
+    Object.assign(breadcrumb.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        padding: "8px",
+        marginBottom: "8px",
+        fontSize: "11px",
+        background: "rgba(15,23,42,0.4)",
+        borderRadius: "6px",
+        flexWrap: "wrap",
+    });
+    dialog.appendChild(breadcrumb);
+
+    // Folder list container
+    const folderList = document.createElement("div");
+    Object.assign(folderList.style, {
+        flex: "1",
+        overflowY: "auto",
+        minHeight: "300px",
+        maxHeight: "400px",
+        border: "1px solid rgba(148,163,184,0.2)",
+        borderRadius: "6px",
+        padding: "8px",
+        background: "rgba(15,23,42,0.2)",
+    });
+    dialog.appendChild(folderList);
+
+    // Buttons
+    const buttons = document.createElement("div");
+    Object.assign(buttons.style, {
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: "8px",
+        marginTop: "12px",
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    Object.assign(cancelBtn.style, {
+        borderRadius: "6px",
+        border: "1px solid rgba(148,163,184,0.55)",
+        padding: "6px 16px",
+        fontSize: "11px",
+        cursor: "pointer",
+        background: "rgba(15,23,42,0.85)",
+        color: "#e5e7eb",
+    });
+    cancelBtn.onclick = () => {
+        document.body.removeChild(pickerModal);
+    };
+
+    const selectBtn = document.createElement("button");
+    selectBtn.textContent = "Select Folder";
+    Object.assign(selectBtn.style, {
+        borderRadius: "6px",
+        border: "1px solid rgba(148,163,184,0.55)",
+        padding: "6px 16px",
+        fontSize: "11px",
+        cursor: "pointer",
+        background: "rgba(59,130,246,0.8)",
+        color: "#e5e7eb",
+    });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(selectBtn);
+    dialog.appendChild(buttons);
+
+    pickerModal.appendChild(dialog);
+    document.body.appendChild(pickerModal);
+
+    // Current selected path
+    let currentPath = inputElement.value || "";
+    let selectedPath = currentPath;
+
+    // Update breadcrumb and path display
+    function updateBreadcrumb() {
+        breadcrumb.innerHTML = "";
+        currentPathDisplay.textContent = currentPath || "Root (Select a drive)";
+        
+        if (!currentPath) {
+            return; // At root, show drives
+        }
+        
+        const parts = currentPath.split(/[/\\]/).filter(p => p);
+        
+        const homeBtn = document.createElement("button");
+        homeBtn.textContent = "🏠 Root";
+        Object.assign(homeBtn.style, {
+            borderRadius: "4px",
+            border: "1px solid rgba(148,163,184,0.35)",
+            padding: "2px 6px",
+            fontSize: "10px",
+            cursor: "pointer",
+            background: "rgba(15,23,42,0.6)",
+            color: "#e5e7eb",
+        });
+        homeBtn.onclick = () => {
+            currentPath = "";
+            loadFolders("");
+        };
+        breadcrumb.appendChild(homeBtn);
+
+        let accumulatedPath = "";
+        parts.forEach((part, index) => {
+            const separator = document.createElement("span");
+            separator.textContent = " / ";
+            separator.style.color = "rgba(148,163,184,0.6)";
+            breadcrumb.appendChild(separator);
+
+            // Build the path up to this point
+            if (index === 0 && part.endsWith(":")) {
+                // First part is a Windows drive letter (C:, D:, etc.)
+                accumulatedPath = part + "\\";
+            } else if (accumulatedPath) {
+                // Append to existing path
+                if (accumulatedPath.endsWith("\\")) {
+                    accumulatedPath = accumulatedPath + part;
+                } else {
+                    accumulatedPath = accumulatedPath + "\\" + part;
+                }
+            } else {
+                // First part (non-drive) - for Unix paths
+                accumulatedPath = "/" + part;
+            }
+            
+            // Store the path for this breadcrumb item
+            const pathForThisItem = accumulatedPath;
+            
+            const pathBtn = document.createElement("button");
+            pathBtn.textContent = part;
+            Object.assign(pathBtn.style, {
+                borderRadius: "4px",
+                border: "1px solid rgba(148,163,184,0.35)",
+                padding: "2px 6px",
+                fontSize: "10px",
+                cursor: "pointer",
+                background: "rgba(15,23,42,0.6)",
+                color: "#e5e7eb",
+            });
+            pathBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Navigate to this path
+                currentPath = pathForThisItem;
+                loadFolders(pathForThisItem);
+            };
+            breadcrumb.appendChild(pathBtn);
+        });
+    }
+
+    // Load folders for current path
+    async function loadFolders(path) {
+        currentPath = path;
+        updateBreadcrumb();
+        folderList.innerHTML = '<div style="color: #aaa; padding: 20px; text-align: center;">Loading...</div>';
+        
+        try {
+            // Ensure path is properly formatted for Windows
+            let apiPath = path;
+            if (apiPath && !apiPath.endsWith('\\') && !apiPath.endsWith('/')) {
+                // For Windows drives like "C:", ensure it ends with backslash
+                if (apiPath.match(/^[A-Z]:$/)) {
+                    apiPath = apiPath + '\\';
+                }
+            }
+            
+            const data = await galleryApi.browseFolder(apiPath);
+            
+            if (!data || !data.ok) {
+                throw new Error(data?.error || "Failed to load folders");
+            }
+            
+            const folders = data.folders || [];
+            
+            if (folders.length === 0) {
+                folderList.innerHTML = '<div style="color: #aaa; padding: 20px; text-align: center;">No folders found</div>';
+                return;
+            }
+
+            folderList.innerHTML = "";
+            folders.forEach((folder) => {
+                const folderItem = document.createElement("div");
+                Object.assign(folderItem.style, {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    background: "rgba(148,163,184,0.1)",
+                    marginBottom: "4px",
+                });
+                folderItem.onmouseenter = () => {
+                    folderItem.style.background = "rgba(148,163,184,0.2)";
+                };
+                folderItem.onmouseleave = () => {
+                    folderItem.style.background = "rgba(148,163,184,0.1)";
+                };
+                folderItem.onclick = () => {
+                    const newPath = folder.path || folder.name;
+                    loadFolders(newPath);
+                };
+
+                const icon = document.createElement("span");
+                icon.textContent = folder.isDrive ? "💾" : "📁";
+                icon.style.fontSize = "16px";
+
+                const name = document.createElement("span");
+                name.textContent = folder.name || folder.path;
+                name.style.flex = "1";
+
+                folderItem.appendChild(icon);
+                folderItem.appendChild(name);
+                folderList.appendChild(folderItem);
+            });
+        } catch (err) {
+            console.error("[Gallery] Failed to load folders:", err);
+            const errorMsg = err.message || "Unknown error";
+            folderList.innerHTML = `<div style="color: #f87171; padding: 20px; text-align: center;">
+                <div style="margin-bottom: 8px;">Error: ${errorMsg}</div>
+                <div style="font-size: 10px; color: #94a3b8;">Path: ${path || '(root)'}</div>
+                <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">Please restart ComfyUI server if this is a 404 error.</div>
+            </div>`;
+        }
+    }
+
+    // Select button handler
+    selectBtn.onclick = () => {
+        selectedPath = currentPath;
+        if (selectedPath) {
+            inputElement.value = selectedPath;
+            updateGallerySettings({ rootGalleryFolder: selectedPath });
+        }
+        document.body.removeChild(pickerModal);
+    };
+
+    // Close on backdrop click
+    pickerModal.onclick = (e) => {
+        if (e.target === pickerModal) {
+            document.body.removeChild(pickerModal);
+        }
+    };
+
+    // Load initial folders
+    loadFolders(currentPath);
+}
+
+function toggleViewMode(isExplorer) {
+    if (!gridRootEl || !explorerRootEl) return;
+    
+    if (isExplorer) {
+        gridRootEl.style.display = "none";
+        explorerRootEl.style.display = "flex";
+        // Reload explorer when switching to it
+        if (typeof window !== 'undefined' && window.USG_GALLERY_EXPLORER_RELOAD) {
+            window.USG_GALLERY_EXPLORER_RELOAD();
+        }
+    } else {
+        gridRootEl.style.display = "flex";
+        explorerRootEl.style.display = "none";
+        // Reload grid when switching back
+        if (typeof window !== 'undefined' && window.USG_GALLERY_RELOAD_IMAGES) {
+            window.USG_GALLERY_RELOAD_IMAGES();
+        }
+    }
 }
 
 // -------------------------------------------------------------------

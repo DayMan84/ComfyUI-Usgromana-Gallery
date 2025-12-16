@@ -12,6 +12,7 @@ import {
     subscribeGallerySettings,
     updateGallerySettings,
 } from "./gallerySettings.js";
+import { initDragDrop } from "./dragDrop.js";
 
 let initialized = false;
 let loading = false;
@@ -461,6 +462,9 @@ export async function initGalleryExtension() {
 
     createOverlay();
     createFloatingButton();
+    
+    // Initialize drag and drop functionality
+    initDragDrop();
 
     // Keep button alive even if Vue re-renders the actionbar
     startAnchorWatch();

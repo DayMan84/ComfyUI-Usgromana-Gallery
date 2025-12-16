@@ -2,7 +2,7 @@
 // Persistent details overlay + 3-image viewer (1 full + 2 thumbs)
 // Details NEVER generates thumbnails. It only reuses thumbs registered by the grid/state.
 
-import { getImages } from "../core/state.js";
+import { getImages, setImages, resetGridHasSetVisibleImagesFlag } from "../core/state.js";
 import { galleryApi } from "../core/api.js";
 import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
@@ -43,6 +43,26 @@ let currentImageInfo = null;
 let metadataVisible = false;
 let leftTargetIndex = null;
 let rightTargetIndex = null;
+
+// Folder context for navigation (when opened from explorer)
+let folderFilter = null; // null = all images, string = folder path to filter by
+
+// Navigation sequence counter to prevent race conditions from concurrent showDetailsForIndex calls
+let detailsNavSeq = 0;
+
+// Track pending unload operations to prevent stale callbacks from unloading the current image
+let pendingUnload = { idleId: null, timeoutId: null };
+
+function cancelPendingUnload() {
+    if (pendingUnload.idleId != null && "cancelIdleCallback" in window) {
+        cancelIdleCallback(pendingUnload.idleId);
+    }
+    if (pendingUnload.timeoutId != null) {
+        clearTimeout(pendingUnload.timeoutId);
+    }
+    pendingUnload.idleId = null;
+    pendingUnload.timeoutId = null;
+}
 
 // permissions
 let currentUser = null;
@@ -363,13 +383,92 @@ function createSideTile(side) {
     return tile;
 }
 
-function navigateRelative(delta) {
+function getFilteredImages() {
     const items = getImages();
-    if (!items.length) return;
-    const len = items.length;
+    if (!folderFilter) {
+        return items; // No filter, return all images
+    }
+    
+    // Filter images to only those in the current folder
+    return items.filter(img => {
+        const imgFolder = img.folder || "";
+        const relpath = img.relpath || "";
+        
+        if (folderFilter === "") {
+            // Root folder - images with no folder or empty folder
+            // Check if relpath has no folder separator (is in root)
+            if (imgFolder === "") {
+                return true;
+            }
+            // Also check if relpath has no "/" (root level file)
+            return !relpath.includes("/");
+        }
+        
+        // Normalize folder paths for comparison (handle both "/" and "\" separators)
+        const normalizePath = (path) => path.replace(/\\/g, "/").replace(/\/+/g, "/");
+        const normalizedFilter = normalizePath(folderFilter);
+        const normalizedImgFolder = normalizePath(imgFolder);
+        const normalizedRelpath = normalizePath(relpath);
+        
+        // Match exact folder
+        if (normalizedImgFolder === normalizedFilter) {
+            return true;
+        }
+        
+        // Check if relpath starts with folder path (for subfolder files)
+        if (normalizedRelpath.startsWith(normalizedFilter + "/")) {
+            return true;
+        }
+        
+        // Check if relpath matches folder exactly (folder itself as a file, though unlikely)
+        if (normalizedRelpath === normalizedFilter) {
+            return true;
+        }
+        
+        // Extract folder from relpath and compare
+        const relpathFolder = normalizedRelpath.includes("/") 
+            ? normalizedRelpath.substring(0, normalizedRelpath.lastIndexOf("/"))
+            : "";
+        
+        return relpathFolder === normalizedFilter;
+    });
+}
 
-    const nextIndex = currentIndex == null ? 0 : ((currentIndex + delta) % len + len) % len;
-    showDetailsForIndex(nextIndex);
+function navigateRelative(delta) {
+    const allItems = getImages();
+    const filteredItems = getFilteredImages();
+    
+    if (!filteredItems.length) {
+        return;
+    }
+    
+    // Find current image in filtered list
+    let filteredIndex = -1;
+    if (currentIndex != null && currentIndex < allItems.length) {
+        const currentImg = allItems[currentIndex];
+        filteredIndex = filteredItems.findIndex(img => 
+            (img.relpath && currentImg.relpath && img.relpath === currentImg.relpath) ||
+            (img.filename && currentImg.filename && img.filename === currentImg.filename)
+        );
+    }
+    
+    if (filteredIndex < 0) {
+        filteredIndex = 0; // Fallback to first image if current not found
+    }
+    
+    const len = filteredItems.length;
+    const nextFilteredIndex = ((filteredIndex + delta) % len + len) % len;
+    const nextImage = filteredItems[nextFilteredIndex];
+    
+    // Find the index of this image in the full list
+    const nextIndex = allItems.findIndex(img =>
+        (img.relpath && nextImage.relpath && img.relpath === nextImage.relpath) ||
+        (img.filename && nextImage.filename && img.filename === nextImage.filename)
+    );
+    
+    if (nextIndex >= 0) {
+        showDetailsForIndex(nextIndex);
+    }
 }
 
 function resizeCardToImage() {
@@ -378,7 +477,14 @@ function resizeCardToImage() {
     const natW = imgEl.naturalWidth || 512;
     const natH = imgEl.naturalHeight || 512;
 
-    const maxW = window.innerWidth * 0.8;
+    // Account for metadata panel if visible
+    let maxW = window.innerWidth * 0.8;
+    if (metadataVisible) {
+        const panelWidth = 340;
+        const gap = 20;
+        maxW = window.innerWidth - panelWidth - gap - 40; // Leave room for panel
+    }
+
     const maxH = window.innerHeight * 0.8;
 
     const paddingW = 10 * 2 + 8 * 2;
@@ -393,70 +499,522 @@ function resizeCardToImage() {
 
     cardEl.style.width = `${Math.round(imgDisplayW + paddingW)}px`;
     cardEl.style.height = `${Math.round(imgDisplayH + paddingH)}px`;
+    
+    // Update metadata panel position after card resizes (if metadata is visible)
+    if (metadataVisible && metaPanel) {
+        // Use a small delay to ensure layout has updated
+        setTimeout(() => {
+            updateMetadataPanelPosition();
+        }, 50);
+    }
 }
 
 // --------------------------
 // Show / hide
 // --------------------------
 export async function showDetailsForIndex(index) {
+    // CRITICAL: Increment navigation sequence to invalidate any stale concurrent calls
+    const navSeq = ++detailsNavSeq;
+    const stillCurrent = () => navSeq === detailsNavSeq;
+    
     if (!modalEl) initDetails();
+    
+    // Check if this call is still current before proceeding
+    if (!stillCurrent()) {
+        return;
+    }
 
     const items = getImages();
-    if (!items.length) return;
+    if (!items.length) {
+        return;
+    }
 
     const len = items.length;
     currentIndex = ((index % len) + len) % len;
 
     const imgInfo = items[currentIndex];
+    if (!imgInfo) {
+        return;
+    }
+    
+    // CRITICAL FIX: Capture previous image info BEFORE overwriting currentImageInfo
+    // This is needed for proper collision detection (same filename, different folder)
+    const prevImageInfo = currentImageInfo;
     currentImageInfo = imgInfo;
+    
+
+    // Unload previous image to free memory (especially important for large images)
+    // CRITICAL FIX: Guard unload to prevent stale callbacks from unloading the current image
+    // Capture the src to unload and navSeq BEFORE checking, so we only unload what we intended
+    if (imgEl && imgEl.src) {
+        const srcToUnload = imgEl.src;  // Capture what "previous" actually was
+        const seqToUnload = navSeq;     // Tie cleanup to this navigation
+        
+        // Cancel any older scheduled unloads (they're stale by definition)
+        cancelPendingUnload();
+        
+        // Only unload if this is actually a different image (not the same URL)
+        if (srcToUnload !== currentImageUrl) {
+            const prevSize = prevImageInfo?.file_size || prevImageInfo?.size || 0;
+            
+            // Safe unload function: only unloads if still the intended image and navigation
+            const safeUnload = () => {
+                // Only unload if:
+                // 1) this navigation is still current (no newer navigation occurred)
+                // 2) the element is STILL showing the old src we captured (not the new image)
+                if (seqToUnload !== detailsNavSeq) {
+                    return;
+                }
+                if (!imgEl || imgEl.src !== srcToUnload) {
+                    return;
+                }
+                unloadImage(imgEl);
+            };
+            
+            // Use requestIdleCallback to unload when browser is idle
+            if ('requestIdleCallback' in window) {
+                pendingUnload.idleId = requestIdleCallback(safeUnload, { timeout: 150 });
+            } else {
+                // Fallback: unload after a short delay
+                pendingUnload.timeoutId = setTimeout(safeUnload, 75);
+            }
+        }
+    }
+
+    // Show modal immediately for instant feedback
+    modalEl.style.display = "flex";
+    
+    // Show loading indicator in center image
+    if (imgEl) {
+        imgEl.style.opacity = "0.3";
+        // Add loading spinner overlay
+        let loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (!loadingSpinner && cardEl) {
+            loadingSpinner = document.createElement("div");
+            loadingSpinner.className = "details-loading-spinner";
+            Object.assign(loadingSpinner.style, {
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "40px",
+                height: "40px",
+                border: "3px solid rgba(56,189,248,0.3)",
+                borderTop: "3px solid rgba(56,189,248,0.9)",
+                borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+                zIndex: "10",
+                pointerEvents: "none",
+            });
+            // Add spin animation if not exists
+            if (!document.getElementById("details-spinner-style")) {
+                const style = document.createElement("style");
+                style.id = "details-spinner-style";
+                style.textContent = `@keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }`;
+                document.head.appendChild(style);
+            }
+            cardEl.appendChild(loadingSpinner);
+        }
+        if (loadingSpinner) loadingSpinner.style.display = "block";
+    }
 
     // ensure/merge metadata
+    // CRITICAL: Check if still current before and after await to prevent stale calls from proceeding
+    if (!stillCurrent()) return;
     await ensureHistoryMarker(imgInfo);
+    if (!stillCurrent()) return;
 
     // MAIN IMAGE: full-res only here (no thumb fallbacks)
+    // Ensure we always use the full-size image, never thumbnails
+    // CRITICAL: Always use relpath (includes folder) to avoid URL collisions for same-named files in different folders
     const rel = imgInfo.relpath || imgInfo.filename || "";
-    const newImageUrl = imgInfo.url || `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    
+    // ALWAYS reconstruct URL from relpath to ensure uniqueness and avoid collisions
+    // Don't trust imgInfo.url as it might have been constructed from filename only
+    let newImageUrl = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    
+    // Remove any size=thumb parameter if present (shouldn't happen, but safety check)
+    if (newImageUrl.includes("size=thumb")) {
+        newImageUrl = newImageUrl.replace(/[?&]size=thumb/, "").replace(/&$/, "");
+    }
+    
+    // Ensure we're not using a thumbnail URL (shouldn't happen, but safety check)
+    if (newImageUrl.includes("_thumbs") || newImageUrl.includes("/thumb")) {
+        // Reconstruct URL without thumb path - ALWAYS use relpath to ensure uniqueness
+        newImageUrl = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    }
+    
+    // Check if URL is the same as previous (potential collision issue)
+    const urlChanged = newImageUrl !== currentImageUrl;
+    
     
     // Reset zoom and drag when switching images
     resetZoomAndDrag();
     
+    // CRITICAL FIX: Only clear src if there's a potential collision (same filename)
+    // This prevents browser from using cached image when navigating between images
+    // with the same name but different folder paths, while avoiding unnecessary
+    // clearing that could break normal navigation
+    // Use prevImageInfo (captured before overwriting currentImageInfo) for collision detection
+    const currentFilename = prevImageInfo?.filename || "";
+    const newFilename = imgInfo.filename || "";
+    // Extract filename from currentImageUrl if prevImageInfo isn't available
+    // Match the actual filename at the end of the path (after the last /)
+    const urlFilename = currentImageUrl ? currentImageUrl.match(/[^/]+\.(png|jpg|jpeg|webp|gif|bmp)(?:\?|$)/i)?.[0] : "";
+    const checkFilename = currentFilename || urlFilename;
+    // Only consider it a collision if:
+    // 1. Both filenames exist and are the same
+    // 2. The URL actually changed (different paths)
+    // 3. We have a valid filename to check
+    const potentialCollision = checkFilename && newFilename && 
+                                checkFilename === newFilename && 
+                                urlChanged &&
+                                currentImageUrl !== newImageUrl;
+    
+    if (potentialCollision && imgEl && imgEl.src) {
+        // CRITICAL: Check if still current before doing destructive src clearing
+        if (!stillCurrent()) return;
+        
+        const oldSrc = imgEl.src;
+        // Clear src to force browser to recognize new image
+        imgEl.src = "";
+        imgEl.removeAttribute("src");
+        // Small delay to ensure browser processes the src clearing
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        // CRITICAL: Check if still current after await - another navigation may have occurred
+        if (!stillCurrent()) {
+            return;
+        }
+        
+    } else if (!potentialCollision && imgEl && imgEl.src) {
+    }
+    
     // Always update image URL (even if same, to ensure it displays)
-    currentImageUrl = newImageUrl;
+    // CRITICAL: If URL is the same as current src, we need to force a reload
+    // This happens when navigating back to a previously viewed image
+    const needsForceReload = imgEl.src && (imgEl.src === newImageUrl || imgEl.src.endsWith(newImageUrl));
+    
+    // CRITICAL FIX: If needsForceReload is true, append a cache-buster to force browser to reload
+    // This ensures onload fires even when the browser thinks the image is already cached
+    let finalImageUrl = newImageUrl;
+    if (needsForceReload) {
+        finalImageUrl += (finalImageUrl.includes("?") ? "&" : "?") + "v=" + Date.now();
+    }
+    
+    currentImageUrl = finalImageUrl;
     
     // protect against out-of-order loads when navigating fast
     const loadToken = Symbol("details-load");
     imgEl._loadToken = loadToken;
+    imgEl._loadStartTime = Date.now();
+    
+    if (needsForceReload) {
+    }
 
     const handleImageLoad = () => {
-        if (imgEl._loadToken !== loadToken) return;
-        resizeCardToImage();
-        fillMetadata(imgInfo);
+        if (imgEl._loadToken !== loadToken) {
+            return;
+        }
+        
+        // CRITICAL: Validate image actually loaded - check dimensions
+        // If dimensions are 0x0, the image hasn't actually loaded yet
+        // This can happen when decode() resolves before image data is ready
+        if (imgEl.naturalWidth === 0 || imgEl.naturalHeight === 0) {
+            // Wait a bit and check again - if still 0x0, trigger actual load
+            setTimeout(() => {
+                // CRITICAL: Check if this navigation is still current before proceeding
+                if (!stillCurrent()) return;
+                
+                if (imgEl._loadToken === loadToken && (imgEl.naturalWidth === 0 || imgEl.naturalHeight === 0)) {
+                    // Image still not loaded - force reload by clearing and resetting src
+                    const oldSrc = imgEl.src;
+                    imgEl.src = "";
+                    imgEl.removeAttribute("src");
+                    setTimeout(() => {
+                        if (imgEl._loadToken === loadToken) {
+                            imgEl.src = currentImageUrl;
+                        }
+                    }, 10);
+                } else if (imgEl._loadToken === loadToken && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                    // Image now loaded - proceed with handler
+                    handleImageLoad();
+                }
+            }, 100);
+            return;
+        }
+        
+        const loadTime = Date.now() - (imgEl._loadStartTime || Date.now());
+        const imageSize = imgInfo.file_size || imgInfo.size || 0;
+        
+        
+        // Hide loading spinner
+        const loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (loadingSpinner) loadingSpinner.style.display = "none";
+        imgEl.style.opacity = "1";
+        
+        // Remove will-change after image loads to free resources
+        if (imgEl.style.willChange) {
+            // Defer removal to avoid layout thrashing
+            requestAnimationFrame(() => {
+                imgEl.style.willChange = "auto";
+            });
+        }
+        
+        // Use requestAnimationFrame for resize to avoid blocking
+        requestAnimationFrame(() => {
+            resizeCardToImage();
+            fillMetadata(imgInfo);
+            // Update metadata panel position if it's visible (after card resizes)
+            // Use a small delay to ensure card has finished resizing
+            if (metadataVisible && metaPanel) {
+                // Use double requestAnimationFrame to ensure layout is complete
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        updateMetadataPanelPosition();
+                    });
+                });
+            }
+        });
     };
 
     imgEl.onload = handleImageLoad;
     imgEl.onerror = () => {
+        const loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (loadingSpinner) loadingSpinner.style.display = "none";
+        imgEl.style.opacity = "1";
         console.warn("[UsgromanaGallery] Failed to load image:", currentImageUrl);
     };
 
-    // Always set src to ensure image updates
-    // This ensures arrow key navigation always updates the center image
-    imgEl.src = currentImageUrl;
+    // Check image size before loading - large images need special handling
+    const imageSize = imgInfo.file_size || imgInfo.size || imgInfo.bytes || 0;
+    const isLargeImage = imageSize > 10 * 1024 * 1024; // > 10MB
+    
+    
+    // For large images, use async decoding and defer non-critical operations
+    if (isLargeImage) {
+        // Use will-change to hint browser about upcoming changes
+        if (imgEl) {
+            imgEl.style.willChange = "contents";
+        }
+        
+        // Use Image.decode() API if available for async decoding
+        // This prevents blocking the main thread for large images
+        if ('decode' in imgEl) {
+            imgEl.src = currentImageUrl;
+            
+            // Check if image is already loaded (cached) - decode() might resolve immediately
+            if (imgEl.complete && imgEl.src === currentImageUrl) {
+            }
+            
+            // Use decode() to decode image off main thread
+            // CRITICAL: Store the current src when calling decode() to detect if it changed
+            // Also store the decode promise so we can track if it's still the current one
+            const decodeSrc = imgEl.src;
+            const decodePromise = imgEl.decode();
+            imgEl._decodePromise = decodePromise; // Store for tracking
+            imgEl._decodeSrc = decodeSrc; // Store src that decode() was called for
+            
+            decodePromise
+                .then(() => {
+                    // Only proceed if src hasn't changed (navigation hasn't occurred) and this is still the current decode promise
+                    if (imgEl._loadToken === loadToken && imgEl.src === decodeSrc && imgEl._decodePromise === decodePromise) {
+                        // Use requestAnimationFrame to avoid blocking
+                        requestAnimationFrame(() => {
+                            if (imgEl._loadToken === loadToken) { // Double-check token hasn't changed
+                                handleImageLoad();
+                            }
+                        });
+                    } else {
+                    }
+                })
+                .catch((err) => {
+                    // Only fallback to onload if src hasn't changed, token matches, and this is still the current decode promise
+                    // If any of these changed, it means navigation occurred and we should ignore this error
+                    if (imgEl._loadToken === loadToken && imgEl.src === decodeSrc && imgEl._decodePromise === decodePromise) {
+                        requestAnimationFrame(() => {
+                            if (imgEl._loadToken === loadToken) { // Double-check token
+                                handleImageLoad();
+                            }
+                        });
+                    } else {
+                        // This is a decode error from a previous image - ignore it silently
+                    }
+                });
+        } else {
+            // Fallback for browsers without decode API
+            // Use setTimeout to defer loading slightly and avoid blocking
+            setTimeout(() => {
+                imgEl.src = currentImageUrl;
+                // Check if already complete after setting src
+                if (imgEl.complete && imgEl.src === currentImageUrl) {
+                    setTimeout(() => {
+                        if (imgEl._loadToken === loadToken) {
+                            handleImageLoad();
+                        }
+                    }, 0);
+                }
+            }, 0);
+        }
+    } else {
+        // Small images can load normally
+        imgEl.src = currentImageUrl;
+    }
     
     // If image is already loaded (cached), trigger handler immediately
     // This handles the case where browser cache makes onload not fire
-    if (imgEl.complete) {
-        setTimeout(() => handleImageLoad(), 0);
-    }
+    // CRITICAL: Check complete AFTER setting src with a small delay to allow browser to update
+    // This is especially important when navigating back to previously viewed images
+    // Use a longer delay if src was cleared (potential collision) to allow browser to reload
+    // CRITICAL: When potentialCollision is true, src is cleared and then set again
+    // We need to wait longer to ensure src is actually set before checking
+    const delayAfterSrcClear = potentialCollision ? 200 : 50;
+    setTimeout(() => {
+        // CRITICAL: Check if this navigation is still current before proceeding
+        if (!stillCurrent()) {
+            return;
+        }
+        
+        const srcAfterSet = imgEl.src;
+        
+        
+        // CRITICAL: If src is empty, it means src was cleared but not set yet
+        // This can happen when potentialCollision triggers src clearing
+        // If src is still empty after delay, check again after a bit more time
+        if (!srcAfterSet || srcAfterSet === "" || srcAfterSet === window.location.href) {
+            // Retry after a bit more time - src should be set by now
+            // Use longer retry delay if potentialCollision was true
+            const retryDelay = potentialCollision ? 100 : 50;
+            setTimeout(() => {
+                // CRITICAL: Check if this navigation is still current before proceeding
+                if (!stillCurrent()) {
+                    return;
+                }
+                
+                const retrySrc = imgEl.src;
+                if (retrySrc && retrySrc !== "" && retrySrc !== window.location.href && imgEl._loadToken === loadToken) {
+                    // Normalize URLs for comparison
+                    const normalizeUrl = (url) => {
+                        if (!url) return "";
+                        try {
+                            if (url.startsWith("http://") || url.startsWith("https://")) {
+                                const urlObj = new URL(url);
+                                return urlObj.pathname + urlObj.search;
+                            }
+                            return url;
+                        } catch {
+                            return url;
+                        }
+                    };
+                    const normalizedRetrySrc = normalizeUrl(retrySrc);
+                    const normalizedCurrent = normalizeUrl(currentImageUrl);
+                    const srcMatches = normalizedRetrySrc === normalizedCurrent || 
+                                      normalizedRetrySrc.endsWith(normalizedCurrent) || 
+                                      normalizedCurrent.endsWith(normalizedRetrySrc) ||
+                                      retrySrc.includes(currentImageUrl) ||
+                                      currentImageUrl.includes(retrySrc);
+                    // Now check if image is complete
+                    if (imgEl.complete && srcMatches && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                        if (imgEl._loadToken === loadToken) {
+                            handleImageLoad();
+                        }
+                    }
+                }
+            }, 50); // Small additional delay
+            return; // Wait for retry or onload
+        }
+        
+        // Normalize URLs for comparison - extract the path+query part
+        const normalizeUrl = (url) => {
+            if (!url) return "";
+            try {
+                // If it's a full URL, extract pathname + search
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    const urlObj = new URL(url);
+                    return urlObj.pathname + urlObj.search;
+                }
+                // If it's a relative URL, use as-is
+                return url;
+            } catch {
+                // Fallback: just use the URL as-is
+                return url;
+            }
+        };
+        const normalizedSrc = normalizeUrl(srcAfterSet);
+        const normalizedCurrent = normalizeUrl(currentImageUrl);
+        // Check if src matches (accounting for URL encoding differences and full vs relative URLs)
+        const srcMatches = normalizedSrc === normalizedCurrent || 
+                          normalizedSrc.endsWith(normalizedCurrent) || 
+                          normalizedCurrent.endsWith(normalizedSrc) ||
+                          srcAfterSet.includes(currentImageUrl) ||
+                          currentImageUrl.includes(srcAfterSet);
+        
+        
+        if (imgEl.complete && srcMatches && imgEl._loadToken === loadToken) {
+            // Also validate dimensions are valid before considering it loaded
+            if (imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                // For both large and small images, if they're cached, trigger handler
+                // But only if loadToken still matches (navigation hasn't changed)
+                if (imgEl._loadToken === loadToken) {
+                    handleImageLoad();
+                }
+            } else {
+            }
+        }
+    }, delayAfterSrcClear); // Delay longer if src was cleared
 
     // PREV/NEXT: thumbnails only, from state registry or existing thumb_url only.
-    // Use the SAME items array that was used to calculate currentIndex
-    const prevIndex = (currentIndex - 1 + len) % len;
-    const nextIndex = (currentIndex + 1) % len;
-    const prev = items[prevIndex];
-    const next = items[nextIndex];
+    // Calculate prev/next indices - use filtered images if folder filter is active
+    let prevIndex, nextIndex, prev, next;
+    
+    if (folderFilter) {
+        // Use filtered images for navigation
+        const filteredItems = getFilteredImages();
+        if (filteredItems.length > 0) {
+            // Find current image in filtered list
+            let filteredCurrentIndex = filteredItems.findIndex(img =>
+                (img.relpath && imgInfo.relpath && img.relpath === imgInfo.relpath) ||
+                (img.filename && imgInfo.filename && img.filename === imgInfo.filename)
+            );
+            
+            if (filteredCurrentIndex < 0) {
+                filteredCurrentIndex = 0;
+            }
+            
+            const filteredLen = filteredItems.length;
+            // Wrap around - if only one image, prev and next both point to it
+            const prevFilteredIndex = filteredLen > 0 ? (filteredCurrentIndex - 1 + filteredLen) % filteredLen : 0;
+            const nextFilteredIndex = filteredLen > 0 ? (filteredCurrentIndex + 1) % filteredLen : 0;
+            
+            prev = filteredItems[prevFilteredIndex];
+            next = filteredItems[nextFilteredIndex];
+            
+            // Find indices in full list
+            prevIndex = prev ? items.findIndex(img =>
+                (img.relpath && prev.relpath && img.relpath === prev.relpath) ||
+                (img.filename && prev.filename && img.filename === prev.filename)
+            ) : -1;
+            
+            nextIndex = next ? items.findIndex(img =>
+                (img.relpath && next.relpath && img.relpath === next.relpath) ||
+                (img.filename && next.filename && img.filename === next.filename)
+            ) : -1;
+        } else {
+            prevIndex = -1;
+            nextIndex = -1;
+            prev = null;
+            next = null;
+        }
+    } else {
+        // No filter - use all images
+        prevIndex = (currentIndex - 1 + len) % len;
+        nextIndex = (currentIndex + 1) % len;
+        prev = items[prevIndex];
+        next = items[nextIndex];
+    }
 
-    leftTargetIndex = prevIndex;
-    rightTargetIndex = nextIndex;
+    leftTargetIndex = prevIndex >= 0 ? prevIndex : null;
+    rightTargetIndex = nextIndex >= 0 ? nextIndex : null;
 
     // Generate thumbnail URLs directly from image data to ensure correctness
     // Don't rely on registry which may have stale/incorrect mappings
@@ -485,20 +1043,40 @@ export async function showDetailsForIndex(index) {
         }
     }
 
-    if (leftTileImg) {
-        if (prevThumb) {
-            leftTileImg.src = prevThumb;
+    // Update left/right tiles with proper visibility
+    if (leftTile) {
+        if (prevThumb && leftTargetIndex != null) {
+            if (leftTileImg) {
+                leftTileImg.src = prevThumb;
+            }
+            leftTile.style.opacity = "1";
+            leftTile.style.pointerEvents = "auto";
         } else {
-            leftTileImg.src = "";
-            leftTileImg.removeAttribute("src");
+            if (leftTileImg) {
+                leftTileImg.src = "";
+                leftTileImg.removeAttribute("src");
+            }
+            // Keep tiles visible even with one image (they'll wrap to the same image)
+            leftTile.style.opacity = "1";
+            leftTile.style.pointerEvents = "auto";
         }
     }
-    if (rightTileImg) {
-        if (nextThumb) {
-            rightTileImg.src = nextThumb;
+    
+    if (rightTile) {
+        if (nextThumb && rightTargetIndex != null) {
+            if (rightTileImg) {
+                rightTileImg.src = nextThumb;
+            }
+            rightTile.style.opacity = "1";
+            rightTile.style.pointerEvents = "auto";
         } else {
-            rightTileImg.src = "";
-            rightTileImg.removeAttribute("src");
+            if (rightTileImg) {
+                rightTileImg.src = "";
+                rightTileImg.removeAttribute("src");
+            }
+            // Keep tiles visible even with one image (they'll wrap to the same image)
+            rightTile.style.opacity = "1";
+            rightTile.style.pointerEvents = "auto";
         }
     }
 
@@ -512,8 +1090,18 @@ export async function showDetailsForIndex(index) {
     }
 }
 
+export function setFolderFilter(folderPath) {
+    folderFilter = folderPath;
+}
+
+export function clearFolderFilter() {
+    folderFilter = null;
+}
+
 export function hideDetails() {
     if (!modalEl) return;
+    // Clear folder filter when hiding details
+    folderFilter = null;
 
     // persistent overlay: do NOT remove from DOM
     modalEl.style.display = "none";
@@ -568,6 +1156,44 @@ export function hideDetails() {
 // --------------------------
 // Metadata panel
 // --------------------------
+
+function updateMetadataPanelPosition() {
+    if (!metaPanel || !cardEl || !metadataVisible) return;
+    
+    const cardRect = cardEl.getBoundingClientRect();
+    const panelWidth = 340;
+    const gap = 20;
+    const panelLeft = cardRect.right + gap;
+    
+    // Ensure panel doesn't go off-screen
+    const viewportWidth = window.innerWidth;
+    const maxLeft = viewportWidth - panelWidth - 10; // 10px padding from edge
+    const finalLeft = Math.min(panelLeft, maxLeft);
+    
+    // Position panel fixed relative to viewport, next to card's right edge
+    Object.assign(metaPanel.style, {
+        position: "fixed",
+        left: `${finalLeft}px`,
+        right: "auto", // Override right: 0
+        top: "50%",
+        transform: "translateY(-50%)",
+        height: "90vh",
+        maxHeight: "90vh",
+        width: `${panelWidth}px`,
+        zIndex: "20001",
+        transition: "left 0.2s ease", // Smooth transition
+    });
+    
+    // Also update image max width dynamically to prevent overlap
+    if (imgEl) {
+        const availableWidth = Math.max(300, finalLeft - 40); // Ensure minimum width
+        Object.assign(imgEl.style, {
+            maxWidth: `${availableWidth}px`,
+            transition: "max-width 0.2s ease",
+        });
+    }
+}
+
 function toggleMetadata() {
     metadataVisible = !metadataVisible;
 
@@ -600,27 +1226,7 @@ function toggleMetadata() {
                 metaPanel.style.display = "flex";
             }
             
-            // Function to update panel position based on card's right edge
-            const updatePanelPosition = () => {
-                const cardRect = cardEl.getBoundingClientRect();
-                const panelWidth = 340;
-                const gap = 20;
-                const panelLeft = cardRect.right + gap;
-                
-                // Position panel fixed relative to viewport, next to card's right edge
-                Object.assign(metaPanel.style, {
-                    position: "fixed",
-                    left: `${panelLeft}px`,
-                    right: "auto", // Override right: 0
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    height: "90vh",
-                    maxHeight: "90vh",
-                    width: `${panelWidth}px`,
-                    zIndex: "20001",
-                    transition: "left 0.3s ease", // Match card's transition duration
-                });
-            };
+            // Use the global updateMetadataPanelPosition function
             
             // Get current panel position (at right: 0, viewport edge)
             const currentPanelRect = metaPanel.getBoundingClientRect();
@@ -640,26 +1246,23 @@ function toggleMetadata() {
             // Wait for card transition to complete, THEN calculate and transition panel position
             // This ensures we use the actual final card position, not a predicted one
             setTimeout(() => {
-                // Get the ACTUAL final card position after transition
-                const finalCardRect = cardEl.getBoundingClientRect();
-                const finalPanelLeft = finalCardRect.right + gap;
-                
-                // Now transition to final position smoothly
-                Object.assign(metaPanel.style, {
-                    left: `${finalPanelLeft}px`,
-                    transition: "left 0.3s ease", // Smooth transition
-                });
+                updateMetadataPanelPosition();
             }, 350); // Wait for card's margin transition (0.3s) to complete first
             
             // Store update function for resize handler
             if (!window._galleryPanelUpdatePosition) {
-                window._galleryPanelUpdatePosition = updatePanelPosition;
+                window._galleryPanelUpdatePosition = updateMetadataPanelPosition;
                 window.addEventListener('resize', () => {
                     if (metadataVisible && metaPanel && cardEl) {
-                        updatePanelPosition();
+                        updateMetadataPanelPosition();
                     }
                 });
             }
+            
+            // Initial position update
+            setTimeout(() => {
+                updateMetadataPanelPosition();
+            }, 100);
         }
         
         // if we already have an image open, rebuild metadata
@@ -1534,13 +2137,28 @@ function addDeleteButton(imgInfo) {
             deleteBtn.style.opacity = "0.6";
             deleteBtn.style.cursor = "not-allowed";
             
-            await galleryApi.batchDelete([filename]);
+            const result = await galleryApi.batchDelete([filename]);
+            
+            
+            // CRITICAL: Immediately reload images to remove deleted image from grid
+            // This provides instant feedback instead of waiting for file monitor polling
+            try {
+                const images = await galleryApi.listImages();
+                // CRITICAL: Reset the grid flag first to allow setImages to update visibleImages
+                // Then call setImages with resetVisible=true to ensure the grid sees the change
+                if (typeof window !== 'undefined' && window.__USG_GALLERY_GRID_INIT__) {
+                    // Reset the flag so setImages can update visibleImages
+                    resetGridHasSetVisibleImagesFlag();
+                }
+                setImages(images, true); // Force reset to ensure grid sees the change
+                // Grid will auto-update via state subscription
+            } catch (reloadErr) {
+                console.warn("[UsgromanaGallery] Failed to reload images after deletion:", reloadErr);
+                // Non-fatal - file monitor will catch it eventually
+            }
             
             // Close details view
             hideDetails();
-            
-            // Reload images in grid (triggered by file monitor or manual refresh)
-            // The grid should automatically update when the file is deleted
         } catch (err) {
             console.error("[UsgromanaGallery] Failed to delete image:", err);
             alert(`Failed to delete image: ${err.message || "Unknown error"}`);
