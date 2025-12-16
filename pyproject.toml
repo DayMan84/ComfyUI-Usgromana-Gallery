@@ -23,10 +23,10 @@ license = {file = "LICENSE"}
 dependencies = ["aiohttp", "PyJWT", "bcrypt", "bleach"]
 
 [project.urls]
-Repository = "https://github.com/DayMan84/ComfyUI-Usgromana"
+Repository = "https://github.com/DayMan84/ComfyUI-Usgromana-Gallery"
 #  Used by Comfy Registry https://registry.comfy.org
-Documentation = "https://github.com/DayMan84/ComfyUI-Usgromana/wiki"
-"Bug Tracker" = "https://github.com/DayMan84/ComfyUI-Usgromana/issues"
+Documentation = "https://github.com/DayMan84/ComfyUI-Usgromana-Gallery/wiki"
+"Bug Tracker" = "https://github.com/DayMan84/ComfyUI-Usgromana-Gallery/issues"
 
 [tool.comfy]
 PublisherId = "dayman84"
