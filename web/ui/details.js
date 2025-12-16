@@ -280,13 +280,36 @@ export function initDetails(_rootIgnored) {
     });
 
     metaContent = document.createElement("div");
+    metaContent.className = "usg-gallery-meta-content";
     Object.assign(metaContent.style, {
         overflow: "auto",
         paddingRight: "6px",
         flex: "1",
         color: "#e5e7eb",
         fontSize: "12px",
+        // Hide scrollbar but keep scrolling
+        scrollbarWidth: "none", // Firefox
+        msOverflowStyle: "none", // IE/Edge
     });
+    
+    // Add CSS to hide scrollbar for webkit browsers (Chrome, Safari)
+    if (!document.getElementById("usg-gallery-meta-scrollbar-style")) {
+        const style = document.createElement("style");
+        style.id = "usg-gallery-meta-scrollbar-style";
+        style.textContent = `
+            .usg-gallery-meta-content::-webkit-scrollbar {
+                width: 0px;
+                background: transparent;
+            }
+            .usg-gallery-meta-content::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .usg-gallery-meta-content::-webkit-scrollbar-thumb {
+                background: transparent;
+            }
+        `;
+        document.head.appendChild(style);
+    }
 
     metaPanel.appendChild(metaContent);
     // Attach metadata panel to modalEl so it's positioned relative to the modal, not the card
