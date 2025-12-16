@@ -13,6 +13,7 @@ import {
     updateGallerySettings,
 } from "./gallerySettings.js";
 import { initDragDrop } from "./dragDrop.js";
+import { initThemeSystem } from "./themeManager.js";
 
 let initialized = false;
 let loading = false;
@@ -460,6 +461,9 @@ export async function initGalleryExtension() {
     if (initialized) return;
     initialized = true;
 
+    // Initialize theme system first
+    initThemeSystem();
+    
     createOverlay();
     createFloatingButton();
     

@@ -11,6 +11,7 @@ import {
 } from "../core/gallerySettings.js";
 import { ASSETS } from "../core/constants.js";
 import { galleryApi } from "../core/api.js";
+import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js";
 
 let overlayEl = null;
 let gridRootEl = null;
@@ -31,13 +32,14 @@ let filterPanelApplyFromSettings = null; // Store reference to apply function
 function ensureOverlay() {
     if (initialized && overlayEl) return overlayEl;
 
+    const theme = getCurrentTheme();
     overlayEl = document.createElement("div");
     overlayEl.className = "usg-gallery-overlay";
     Object.assign(overlayEl.style, {
         position: "fixed",
         inset: "0",
         zIndex: "10000",
-        background: "rgba(0,0,0,0.20)",
+        background: theme.overlayBackground,
         display: "none",
         justifyContent: "center",
         alignItems: "center",
@@ -50,14 +52,14 @@ function ensureOverlay() {
         height: "90vh",
         maxWidth: "1200px",
         maxHeight: "800px",
-        background: "rgba(3, 7, 18, 0.82)",
+        background: theme.panelBackground,
         borderRadius: "16px",
-        border: "1px solid rgba(148,163,184,0.35)",
-        boxShadow: "0 18px 55px rgba(0,0,0,0.65)",
+        border: `1px solid ${theme.panelBorder}`,
+        boxShadow: `0 18px 55px ${theme.panelShadow}`,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        color: "#e5e7eb",
+        color: theme.textPrimary,
         fontFamily:
             "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     });
@@ -71,8 +73,8 @@ function ensureOverlay() {
         alignItems: "center",
         justifyContent: "space-between",
         padding: "8px 12px 6px",
-        borderBottom: "1px solid rgba(51,65,85,0.7)",
-        background: "rgba(15,23,42,0.78)",
+        borderBottom: `1px solid ${theme.headerBorder}`,
+        background: theme.headerBackground,
         backdropFilter: "blur(6px)",
     });
 
@@ -89,7 +91,7 @@ function ensureOverlay() {
     Object.assign(logoImg.style, {
         height: "18px",
         width: "auto",
-        filter: "drop-shadow(0 0 6px rgba(56,189,248,0.55))",
+        filter: `drop-shadow(0 0 6px ${theme.logoGlow})`,
     });
 
     const titleEl = document.createElement("div");
@@ -99,8 +101,8 @@ function ensureOverlay() {
         fontWeight: "600",
         letterSpacing: "0.12em",
         textTransform: "uppercase",
-        color: "#e5e7eb",
-        textShadow: "0 0 4px rgba(15,23,42,0.9)",
+        color: theme.textPrimary,
+        textShadow: theme.logoTextShadow === "none" ? "none" : `0 0 4px ${theme.logoTextShadow}`,
     });
 
     leftHeader.appendChild(logoImg);
@@ -119,12 +121,12 @@ function ensureOverlay() {
     let isExplorerMode = false;
     Object.assign(explorerToggleButton.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.55)",
+        border: `1px solid ${theme.buttonBorder}`,
         padding: "4px 10px",
         fontSize: "11px",
         cursor: "pointer",
-        background: "rgba(15,23,42,0.8)",
-        color: "#e5e7eb",
+        background: theme.buttonBackground,
+        color: theme.buttonText,
         display: "inline-flex",
         alignItems: "center",
         gap: "4px",
@@ -143,12 +145,12 @@ function ensureOverlay() {
     settingsButton.title = "Gallery settings";
     Object.assign(settingsButton.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.55)",
+        border: `1px solid ${theme.buttonBorder}`,
         padding: "4px 10px",
         fontSize: "11px",
         cursor: "pointer",
-        background: "rgba(15,23,42,0.8)",
-        color: "#e5e7eb",
+        background: theme.buttonBackground,
+        color: theme.buttonText,
         display: "inline-flex",
         alignItems: "center",
         gap: "4px",
@@ -162,13 +164,13 @@ function ensureOverlay() {
     closeButton.textContent = "✕";
     Object.assign(closeButton.style, {
         borderRadius: "999px",
-        border: "1px solid rgba(148,163,184,0.45)",
+        border: `1px solid ${theme.buttonBorder}`,
         width: "22px",
         height: "22px",
         fontSize: "11px",
         cursor: "pointer",
-        background: "rgba(15,23,42,0.85)",
-        color: "#e5e7eb",
+        background: theme.buttonBackgroundHover,
+        color: theme.buttonText,
     });
     
     closeButton.onclick = () => {
@@ -244,11 +246,19 @@ function ensureOverlay() {
 
     // Theme/logo + remember last inline divider style
     subscribeGallerySettings((s) => {
-        logoImg.src = s.theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        logoImg.src = s.theme === "light" || s.theme === "lightSubtle" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
         if (s.dividerStyle && s.dividerStyle !== "page") {
             lastInlineDividerStyle = s.dividerStyle;
         }
     });
+    
+    // Subscribe to theme changes to update overlay colors
+    subscribeTheme((theme) => {
+        applyThemeToOverlay(theme);
+    });
+    
+    // Apply initial theme
+    applyThemeToOverlay(getCurrentTheme());
 
     initialized = true;
     return overlayEl;
@@ -289,6 +299,7 @@ export function openGalleryOverlay() {
 
 function openSettingsModal(panel) {
     const current = getGallerySettings();
+    const theme = getCurrentTheme();
 
     if (!settingsModalEl) {
         settingsModalEl = document.createElement("div");
@@ -297,14 +308,14 @@ function openSettingsModal(panel) {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            background: "rgba(27, 27, 27, 0.9)",
+            background: theme.settingsBackground,
             borderRadius: "12px",
-            border: "1px solid rgba(94, 94, 94, 0.20)",
-            boxShadow: "0 18px 40px rgba(0,0,0,0.89)",
+            border: `1px solid ${theme.settingsBorder}`,
+            boxShadow: `0 18px 40px ${theme.modalShadow}`,
             padding: "14px 18px",
             minWidth: "260px",
             maxWidth: "380px",
-            color: "#e5e7eb",
+            color: theme.textPrimary,
             zIndex: "20000",
         });
 
@@ -382,15 +393,26 @@ function openSettingsModal(panel) {
         const themeLabel = document.createElement("span");
         themeLabel.textContent = "Theme:";
         const themeSelect = document.createElement("select");
-        ["dark", "light"].forEach((opt) => {
+        [
+            { value: "dark", label: "Dark" },
+            { value: "darkHighContrast", label: "Dark High Contrast" },
+            { value: "darkSubtle", label: "Dark Subtle" },
+            { value: "darkBlue", label: "Dark Blue" },
+            { value: "light", label: "Light" },
+            { value: "lightSubtle", label: "Light Subtle" },
+        ].forEach((opt) => {
             const o = document.createElement("option");
-            o.value = opt;
-            o.textContent = opt;
+            o.value = opt.value;
+            o.textContent = opt.label;
             themeSelect.appendChild(o);
         });
         themeSelect.value = current.theme || "dark";
         themeSelect.onchange = () => {
             updateGallerySettings({ theme: themeSelect.value });
+            // Trigger theme update
+            if (window.USG_GALLERY_APPLY_THEME) {
+                window.USG_GALLERY_APPLY_THEME(themeSelect.value);
+            }
         };
         themeRow.appendChild(themeLabel);
         themeRow.appendChild(themeSelect);
@@ -440,9 +462,9 @@ function openSettingsModal(panel) {
         Object.assign(extInput.style, {
             padding: "4px 8px",
             borderRadius: "6px",
-            border: "1px solid rgba(148,163,184,0.35)",
-            background: "rgba(15,23,42,0.38)",
-            color: "#e5e7eb",
+            border: `1px solid ${theme.inputBorder}`,
+            background: theme.inputBackground,
+            color: theme.inputText,
             fontSize: "11px",
             outline: "none",
             width: "100%",
@@ -481,9 +503,9 @@ function openSettingsModal(panel) {
         Object.assign(rootFolderInput.style, {
             padding: "4px 8px",
             borderRadius: "6px",
-            border: "1px solid rgba(148,163,184,0.35)",
-            background: "rgba(15,23,42,0.38)",
-            color: "#e5e7eb",
+            border: `1px solid ${theme.inputBorder}`,
+            background: theme.inputBackground,
+            color: theme.inputText,
             fontSize: "11px",
             outline: "none",
             flex: "1",
@@ -500,9 +522,9 @@ function openSettingsModal(panel) {
         Object.assign(browseButton.style, {
             padding: "4px 12px",
             borderRadius: "6px",
-            border: "1px solid rgba(148,163,184,0.55)",
-            background: "rgba(15,23,42,0.85)",
-            color: "#e5e7eb",
+            border: `1px solid ${theme.buttonBorder}`,
+            background: theme.buttonBackgroundHover,
+            color: theme.buttonText,
             fontSize: "11px",
             cursor: "pointer",
             whiteSpace: "nowrap",
@@ -611,13 +633,14 @@ function openSettingsModal(panel) {
 // -------------------------------------------------------------------
 
 function openFolderPickerDialog(inputElement) {
+    const theme = getCurrentTheme();
     // Create modal overlay
     const pickerModal = document.createElement("div");
     Object.assign(pickerModal.style, {
         position: "fixed",
         inset: "0",
         zIndex: "30000",
-        background: "rgba(0,0,0,0.7)",
+        background: theme.overlayBackground.replace("0.20", "0.7"),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -626,15 +649,15 @@ function openFolderPickerDialog(inputElement) {
     // Create dialog
     const dialog = document.createElement("div");
     Object.assign(dialog.style, {
-        background: "rgba(27, 27, 27, 0.95)",
+        background: theme.modalBackground,
         borderRadius: "12px",
-        border: "1px solid rgba(94, 94, 94, 0.3)",
-        boxShadow: "0 18px 40px rgba(0,0,0,0.89)",
+        border: `1px solid ${theme.modalBorder}`,
+        boxShadow: `0 18px 40px ${theme.modalShadow}`,
         padding: "16px",
         minWidth: "500px",
         maxWidth: "700px",
         maxHeight: "80vh",
-        color: "#e5e7eb",
+        color: theme.textPrimary,
         display: "flex",
         flexDirection: "column",
     });
@@ -655,10 +678,10 @@ function openFolderPickerDialog(inputElement) {
         padding: "8px",
         marginBottom: "8px",
         fontSize: "11px",
-        background: "rgba(15,23,42,0.4)",
+        background: theme.inputBackground,
         borderRadius: "6px",
         wordBreak: "break-all",
-        color: "#94a3b8",
+        color: theme.textSecondary,
     });
     dialog.appendChild(currentPathDisplay);
 
@@ -945,17 +968,18 @@ function openFilterPanel() {
     }
 
     if (!filterPanelEl) {
+        const theme = getCurrentTheme();
         filterPanelEl = document.createElement("div");
         Object.assign(        filterPanelEl.style, {
             position: "fixed",
             top: "90px",
             right: "40px",
             width: "280px",
-            background: "rgba(15,23,42,0.92)",
+            background: theme.filterBackground,
             borderRadius: "14px",
-            border: "1px solid rgba(148,163,184,0.35)",
-            boxShadow: "0 18px 50px rgba(0,0,0,0.85)",
-            color: "#e5e7eb",
+            border: `1px solid ${theme.filterBorder}`,
+            boxShadow: `0 18px 50px ${theme.modalShadow}`,
+            color: theme.textPrimary,
             zIndex: "20010",
             display: "flex",
             flexDirection: "column",
@@ -985,13 +1009,13 @@ function openFilterPanel() {
         closeBtn.textContent = "✕";
         Object.assign(closeBtn.style, {
             borderRadius: "999px",
-            border: "1px solid rgba(148,163,184,0.45)",
+            border: `1px solid ${theme.buttonBorder}`,
             width: "20px",
             height: "20px",
             fontSize: "11px",
             cursor: "pointer",
-            background: "rgba(15,23,42,0.9)",
-            color: "#e5e7eb",
+            background: theme.buttonBackgroundHover,
+            color: theme.buttonText,
         });
         closeBtn.onclick = () => {
             filterPanelEl.style.display = "none";
@@ -1361,6 +1385,103 @@ function ensureOverlayStyles() {
         }
     `;
     document.head.appendChild(style);
+}
+
+/**
+ * Apply theme colors to overlay UI elements
+ */
+function applyThemeToOverlay(theme) {
+    if (!overlayEl) return;
+    
+    // Update overlay background
+    overlayEl.style.background = theme.overlayBackground;
+    
+    // Update panel
+    const panel = overlayEl.querySelector('.usg-gallery-panel');
+    if (panel) {
+        panel.style.background = theme.panelBackground;
+        panel.style.border = `1px solid ${theme.panelBorder}`;
+        panel.style.boxShadow = `0 18px 55px ${theme.panelShadow}`;
+        panel.style.color = theme.textPrimary;
+    }
+    
+    // Update header - find it more reliably
+    const header = panel?.querySelector('div[style*="borderBottom"]') || 
+                   panel?.firstElementChild; // Header is typically the first child
+    if (header && header.style.display === 'flex' && header.style.alignItems === 'center') {
+        header.style.borderBottom = `1px solid ${theme.headerBorder}`;
+        header.style.background = theme.headerBackground;
+        header.style.backdropFilter = "blur(6px)"; // Ensure backdrop filter is applied
+    }
+    
+    // Update logo glow
+    const logoImg = panel?.querySelector('img');
+    if (logoImg) {
+        logoImg.style.filter = `drop-shadow(0 0 6px ${theme.logoGlow})`;
+    }
+    
+    // Update title text - find it by text content or style
+    const titleEl = panel?.querySelector('div[style*="textTransform"]') || 
+                    Array.from(panel?.querySelectorAll('div') || []).find(el => 
+                        el.textContent === "USGROMANA GALLERY PRO"
+                    );
+    if (titleEl) {
+        titleEl.style.color = theme.textPrimary;
+        titleEl.style.textShadow = theme.logoTextShadow === "none" ? "none" : `0 0 4px ${theme.logoTextShadow}`;
+    }
+    
+    // Update buttons in header
+    const headerButtons = panel?.querySelectorAll('button');
+    if (headerButtons) {
+        headerButtons.forEach(btn => {
+            if (btn.textContent.includes('Settings') || btn.textContent.includes('Explorer') || btn.textContent.includes('Viewer')) {
+                btn.style.border = `1px solid ${theme.buttonBorder}`;
+                btn.style.background = theme.buttonBackground;
+                btn.style.color = theme.buttonText;
+            }
+        });
+    }
+    
+    // Update settings modal if it exists
+    if (settingsModalEl) {
+        settingsModalEl.style.background = theme.settingsBackground;
+        settingsModalEl.style.border = `1px solid ${theme.settingsBorder}`;
+        settingsModalEl.style.boxShadow = `0 18px 40px ${theme.modalShadow}`;
+        settingsModalEl.style.color = theme.textPrimary;
+        
+        // Update inputs in settings
+        const inputs = settingsModalEl.querySelectorAll('input');
+        inputs.forEach(input => {
+            input.style.border = `1px solid ${theme.inputBorder}`;
+            input.style.background = theme.inputBackground;
+            input.style.color = theme.inputText;
+        });
+        
+        // Update buttons in settings
+        const buttons = settingsModalEl.querySelectorAll('button');
+        buttons.forEach(btn => {
+            if (btn.textContent === 'Browse') {
+                btn.style.border = `1px solid ${theme.buttonBorder}`;
+                btn.style.background = theme.buttonBackgroundHover;
+                btn.style.color = theme.buttonText;
+            }
+        });
+    }
+    
+    // Update filter panel if it exists
+    if (filterPanelEl) {
+        filterPanelEl.style.background = theme.filterBackground;
+        filterPanelEl.style.border = `1px solid ${theme.filterBorder}`;
+        filterPanelEl.style.boxShadow = `0 18px 50px ${theme.modalShadow}`;
+        filterPanelEl.style.color = theme.textPrimary;
+        
+        const closeBtn = filterPanelEl.querySelector('button');
+        if (closeBtn) {
+            closeBtn.style.border = `1px solid ${theme.buttonBorder}`;
+            closeBtn.style.background = theme.buttonBackgroundHover;
+            closeBtn.style.color = theme.buttonText;
+        }
+    }
 }
 
 // Expose filter panel open/close so grid.js can call them without imports.
