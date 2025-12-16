@@ -104,4 +104,11 @@ export const galleryApi = {
             body: JSON.stringify({ old_filename: oldFilename, new_filename: newFilename }),
         });
     },
+
+    async batchGenerateThumbnails(filenames = []) {
+        return await request("/batch/generate-thumbnails", {
+            method: "POST",
+            body: JSON.stringify({ filenames }),
+        });
+    },
 };

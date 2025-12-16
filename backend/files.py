@@ -62,8 +62,17 @@ def list_output_images(limit: int | None = None, extensions: set[str] | None = N
     exts = extensions or IMAGE_EXTENSIONS
 
     for dirpath, dirnames, filenames in os.walk(root):
+        # Skip thumbnail directories
+        if "_thumbs" in dirpath:
+            continue
+            
         for fname in filenames:
             if not _is_image_file(fname, exts):
+                continue
+            
+            # Skip thumbnail files (they're in _thumbs directory, but also skip if filename suggests it's a thumb)
+            # Thumbnails are served separately and shouldn't appear in main gallery
+            if fname.startswith("thumb_") or "_thumb" in fname.lower():
                 continue
 
             full_path = os.path.join(dirpath, fname)

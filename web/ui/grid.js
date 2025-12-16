@@ -26,6 +26,7 @@ let gridContentEl = null;
 let loadingIndicatorEl = null;
 
 let lastState = null;
+let lastImageCount = 0; // Track previous image count separately to detect deletions
 let ratingMap = new Map();
 let minRatingFilter = 0;
 let gallerySettings = getGallerySettings();
@@ -33,13 +34,30 @@ let searchQuery = "";
 let unsubscribeState = null;
 let unsubscribeSettings = null;
 
+// Image loading progress tracking
+let imageLoadProgress = {
+    total: 0,
+    loaded: 0,
+    failed: 0,
+    visible: 0,  // Images that have entered viewport
+    currentImage: null,
+    startTime: null,
+    imageElements: new Map(),  // Track all image elements
+};
+
 let filterToggleBtn = null;
 let selectedImages = new Set(); // For batch operations
 let batchDownloadBtn = null;
 let batchDeleteBtn = null;
 
-// Debounced search render
+// Debounced search render with cancellation support
+let debounceTimer = null;
 const debouncedRender = debounce(() => {
+    // Cancel any pending hideLoadingIndicator timeouts
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+    }
     renderGridContent();
 }, PERFORMANCE.DEBOUNCE_DELAY);
 
@@ -75,6 +93,13 @@ function ensureGalleryGridStyles() {
             contain-intrinsic-size: 160px 200px; 
             contain: layout paint;
             transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+        }
+        /* Optimize large images in grid */
+        .usg-gallery-card img {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            backface-visibility: hidden;
+            transform: translateZ(0); /* Force GPU acceleration */
         }
         .usg-gallery-card:hover {
             transform: translateY(-2px) scale(1.01);
@@ -133,21 +158,48 @@ export function clearGridThumbnails() {
  *  - push into core state (which will trigger render via subscribe)
  */
 export async function reloadImagesAndRender() {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:135',message:'reloadImagesAndRender start',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'U'})}).catch(()=>{});
+    // #endregion
+    
     clearGridThumbnails();
+    
+    // Reset progress tracking
+    imageLoadProgress.total = 0;
+    imageLoadProgress.loaded = 0;
+    imageLoadProgress.failed = 0;
+    imageLoadProgress.visible = 0;
+    imageLoadProgress.currentImage = null;
+    imageLoadProgress.imageElements.clear();
+    
     showLoadingIndicator();
 
     try {
         const images = await galleryApi.listImages();
         
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:151',message:'Images fetched from API',data:{imageCount:images.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'V'})}).catch(()=>{});
+        // #endregion
+        
         // On manual refresh, reset the flag so setImages can reset visibleImages
         // This allows grid to re-apply filters/sort from scratch
         // We'll reset the flag in setVisibleImages after renderGridContent() sets it
+        // NOTE: Don't update lastImageCount here - let the subscription callback handle it
+        // This prevents race conditions where lastImageCount is updated before subscription fires
         setImages(images, true);   // subscribe() → renderGridContent()
+        
+        // Pre-generate thumbnails in the background for faster loading
+        // Don't await - let it run in background
+        galleryApi.batchGenerateThumbnails().catch(err => {
+            console.warn("[USG-Gallery] Background thumbnail generation failed:", err);
+        });
     } catch (err) {
         console.warn("[USG-Gallery] Failed to reload images:", err);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:165',message:'reloadImagesAndRender error',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'W'})}).catch(()=>{});
+        // #endregion
         // fallback: at least render whatever state we already had
         renderGridContent();
-    } finally {
         hideLoadingIndicator();
     }
 }
@@ -346,6 +398,7 @@ export function initGrid(root) {
         window.__USG_GALLERY_GRID_INIT__ = true;
         window.USG_GALLERY_SHOW_LOADING = showLoadingIndicator;
         window.USG_GALLERY_HIDE_LOADING = hideLoadingIndicator;
+        window.USG_GALLERY_RELOAD_IMAGES = reloadImagesAndRender;
         // Expose function to update rating from details panel
         window.__USG_GALLERY_UPDATE_RATING__ = (key, rating) => {
             if (key) {
@@ -382,12 +435,42 @@ export function initGrid(root) {
     unsubscribeState = subscribe((state) => {
         const prevImages = lastState ? lastState.images : null;
         const newImages = state ? state.images : null;
+        // CRITICAL: Use separately tracked count instead of lastState.images.length
+        // This prevents issues when lastState and state reference the same object
+        const prevCount = lastImageCount;
+        const newCount = newImages?.length || 0;
 
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:433',message:'Grid subscription fired',data:{prevImageCount:prevCount,newImageCount:newCount,lastImageCount,prevImagesRef:prevImages,newImagesRef:newImages,imagesAreSameRef:prevImages===newImages,lastStateIsState:lastState===state},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CJ'})}).catch(()=>{});
+        // #endregion
+
+        // Update tracking variables AFTER capturing previous values
         lastState = state;
+        lastImageCount = newCount;
 
         const isEmpty = !gridContentEl || gridContentEl.childElementCount === 0;
-        if (!isEmpty && prevImages === newImages && prevImages !== null) return;
+        
+        // CRITICAL FIX: Check count change FIRST - if count changed, always re-render
+        // This handles deletions/additions even if reference appears the same
+        const countChanged = prevCount !== newCount;
+        const countDecreased = newCount < prevCount; // Deletion detected
+        const sameReference = prevImages === newImages && prevImages !== null;
+        
+        // Always re-render if:
+        // 1. Count changed (including deletions)
+        // 2. Reference changed
+        // 3. Grid is empty
+        // 4. Count decreased (force re-render on deletion even if count appears same due to timing)
+        if (!isEmpty && sameReference && !countChanged && !countDecreased) {
+            // #region agent log
+            fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:454',message:'Skipping re-render - same image reference and count',data:{prevImageCount:prevCount,newImageCount:newCount,countDecreased},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CK'})}).catch(()=>{});
+            // #endregion
+            return;
+        }
 
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:462',message:'State changed, re-rendering grid',data:{prevImageCount:prevCount,newImageCount:newCount,isEmpty,countChanged,countDecreased,sameReference},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CE'})}).catch(()=>{});
+        // #endregion
         renderGridContent();
     });
 }
@@ -602,6 +685,13 @@ function updateFilterButtons() {
 // ---------------------------------------------------------------------
 
 function createLoadingIndicator() {
+    if (loadingIndicatorEl && loadingIndicatorEl.parentElement) return;
+    
+    // If indicator exists but was removed from DOM, recreate it
+    if (loadingIndicatorEl && !loadingIndicatorEl.parentElement) {
+        loadingIndicatorEl = null;
+    }
+    
     if (loadingIndicatorEl) return;
     
     loadingIndicatorEl = document.createElement("div");
@@ -618,86 +708,174 @@ function createLoadingIndicator() {
         justifyContent: "center",
         gap: "16px",
         zIndex: "1000",
-        pointerEvents: "none",
+        pointerEvents: "none", // Important: don't block interactions
+        background: "rgba(15, 23, 42, 0.95)",
+        padding: "24px 32px",
+        borderRadius: "12px",
+        border: "1px solid rgba(148,163,184,0.3)",
+        minWidth: "400px",
     });
     
-    // Message
-    const messageEl = document.createElement("div");
-    messageEl.textContent = "Processing images...";
-    Object.assign(messageEl.style, {
-        fontSize: "14px",
+    // Status message
+    const statusEl = document.createElement("div");
+    statusEl.className = "usg-loading-status";
+    statusEl.textContent = "Loading images...";
+    Object.assign(statusEl.style, {
+        fontSize: "16px",
         color: "#e5e7eb",
-        fontWeight: "500",
+        fontWeight: "600",
         textAlign: "center",
+        marginBottom: "8px",
+    });
+    
+    // Current image name
+    const imageNameEl = document.createElement("div");
+    imageNameEl.className = "usg-loading-image-name";
+    imageNameEl.textContent = "";
+    Object.assign(imageNameEl.style, {
+        fontSize: "12px",
+        color: "#94a3b8",
+        textAlign: "center",
+        marginBottom: "12px",
+        maxWidth: "100%",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
     });
     
     // Progress bar container
     const progressContainer = document.createElement("div");
     Object.assign(progressContainer.style, {
-        width: "300px",
-        height: "4px",
+        width: "100%",
+        height: "8px",
         background: "rgba(148,163,184,0.2)",
-        borderRadius: "2px",
+        borderRadius: "4px",
         overflow: "hidden",
         position: "relative",
+        marginBottom: "8px",
     });
     
-    // Animated progress bar
+    // Progress bar fill
     const progressBar = document.createElement("div");
     progressBar.className = "usg-gallery-progress-bar";
     Object.assign(progressBar.style, {
         height: "100%",
-        width: "30%",
-        background: "linear-gradient(90deg, rgba(56,189,248,0.8) 0%, rgba(147,51,234,0.8) 100%)",
-        borderRadius: "2px",
-        position: "absolute",
-        animation: "usg-progress-animation 1.5s ease-in-out infinite",
+        width: "0%",
+        background: "linear-gradient(90deg, rgba(56,189,248,0.9) 0%, rgba(147,51,234,0.9) 100%)",
+        borderRadius: "4px",
+        transition: "width 0.3s ease",
+    });
+    
+    // Progress percentage text
+    const progressTextEl = document.createElement("div");
+    progressTextEl.className = "usg-loading-progress-text";
+    progressTextEl.textContent = "0%";
+    Object.assign(progressTextEl.style, {
+        fontSize: "14px",
+        color: "#38bdf8",
+        fontWeight: "500",
+        textAlign: "center",
     });
     
     progressContainer.appendChild(progressBar);
-    loadingIndicatorEl.appendChild(messageEl);
+    loadingIndicatorEl.appendChild(statusEl);
+    loadingIndicatorEl.appendChild(imageNameEl);
     loadingIndicatorEl.appendChild(progressContainer);
+    loadingIndicatorEl.appendChild(progressTextEl);
     
-    // Add animation styles
-    if (!document.getElementById("usg-gallery-loading-style")) {
-        const style = document.createElement("style");
-        style.id = "usg-gallery-loading-style";
-        style.textContent = `
-            @keyframes usg-progress-animation {
-                0% {
-                    left: -30%;
-                    width: 30%;
-                }
-                50% {
-                    left: 100%;
-                    width: 30%;
-                }
-                100% {
-                    left: 100%;
-                    width: 30%;
-                }
-            }
-        `;
-        document.head.appendChild(style);
-    }
-    
-    // Insert into grid content area (needs to be positioned relative)
+    // Insert into scroll container (parent of gridContentEl), not into gridContentEl itself
+    // This ensures it survives gridContentEl.innerHTML = "" calls
     if (gridContentEl && gridContentEl.parentElement) {
-        gridContentEl.parentElement.style.position = "relative";
-        gridContentEl.parentElement.appendChild(loadingIndicatorEl);
+        const scrollContainer = gridContentEl.parentElement;
+        scrollContainer.style.position = "relative";
+        // Only append if not already there
+        if (!scrollContainer.contains(loadingIndicatorEl)) {
+            scrollContainer.appendChild(loadingIndicatorEl);
+        }
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:717',message:'Loading indicator created and appended',data:{parentElement:scrollContainer.className,hasIndicator:scrollContainer.contains(loadingIndicatorEl)},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'N'})}).catch(()=>{});
+        // #endregion
     }
+}
+
+function updateLoadingProgress(loaded, total, currentImageName = null, status = "Loading images...") {
+    // Ensure loading indicator exists and is in DOM
+    if (!loadingIndicatorEl || !loadingIndicatorEl.parentElement) {
+        createLoadingIndicator();
+    }
+    
+    // Ensure it's visible when updating
+    if (loadingIndicatorEl && loadingIndicatorEl.style.display === "none") {
+        loadingIndicatorEl.style.display = "flex";
+    }
+    
+    imageLoadProgress.loaded = loaded;
+    imageLoadProgress.total = total;
+    imageLoadProgress.currentImage = currentImageName;
+    
+    // Calculate percentage based on visible images, not total
+    // CRITICAL: Account for failed images (e.g., deleted files) in progress calculation
+    const visibleTotal = imageLoadProgress.visible || total;
+    const attempted = imageLoadProgress.loaded + imageLoadProgress.failed;
+    // Calculate percentage based on attempted images (loaded + failed) vs visible total
+    const percentage = visibleTotal > 0 ? Math.round((attempted / visibleTotal) * 100) : 0;
+    
+    const statusEl = loadingIndicatorEl.querySelector(".usg-loading-status");
+    const imageNameEl = loadingIndicatorEl.querySelector(".usg-loading-image-name");
+    const progressBar = loadingIndicatorEl.querySelector(".usg-gallery-progress-bar");
+    const progressTextEl = loadingIndicatorEl.querySelector(".usg-loading-progress-text");
+    
+    if (statusEl) statusEl.textContent = status;
+    if (imageNameEl) {
+        imageNameEl.textContent = currentImageName || "";
+        imageNameEl.style.display = currentImageName ? "block" : "none";
+    }
+    if (progressBar) progressBar.style.width = `${percentage}%`;
+    if (progressTextEl) {
+        // Show both visible progress and total count, including failed images
+        if (visibleTotal < total) {
+            if (imageLoadProgress.failed > 0) {
+                progressTextEl.textContent = `${percentage}% (${loaded} loaded, ${imageLoadProgress.failed} failed / ${visibleTotal} visible, ${total} total)`;
+            } else {
+                progressTextEl.textContent = `${percentage}% (${loaded}/${visibleTotal} visible, ${total} total)`;
+            }
+        } else {
+            if (imageLoadProgress.failed > 0) {
+                progressTextEl.textContent = `${percentage}% (${loaded} loaded, ${imageLoadProgress.failed} failed / ${total})`;
+            } else {
+                progressTextEl.textContent = `${percentage}% (${loaded}/${total})`;
+            }
+        }
+    }
+    
+    // Auto-hide when all visible images are loaded
+    // Don't auto-hide immediately - let user see completion
+    // Hide will be triggered manually when appropriate
 }
 
 function showLoadingIndicator() {
     if (!loadingIndicatorEl) createLoadingIndicator();
     if (loadingIndicatorEl) {
+        // Ensure it's in the DOM
+        if (!loadingIndicatorEl.parentElement && gridContentEl && gridContentEl.parentElement) {
+            gridContentEl.parentElement.appendChild(loadingIndicatorEl);
+        }
         loadingIndicatorEl.style.display = "flex";
+        imageLoadProgress.startTime = Date.now();
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:770',message:'showLoadingIndicator called',data:{hasIndicator:!!loadingIndicatorEl,display:loadingIndicatorEl.style.display,hasParent:!!loadingIndicatorEl.parentElement},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'R'})}).catch(()=>{});
+        // #endregion
     }
 }
 
 function hideLoadingIndicator() {
     if (loadingIndicatorEl) {
         loadingIndicatorEl.style.display = "none";
+        // Don't reset progress completely - keep totals for reference
+        imageLoadProgress.currentImage = null;
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:780',message:'Loading indicator hidden',data:{loaded:imageLoadProgress.loaded,visible:imageLoadProgress.visible,total:imageLoadProgress.total},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'T'})}).catch(()=>{});
+        // #endregion
     }
 }
 
@@ -709,11 +887,17 @@ function hideLoadingIndicator() {
 function renderGridContent() {
     if (!gridContentEl) return;
 
-    // Hide loading indicator when rendering starts (images are ready)
-    hideLoadingIndicator();
-
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:792',message:'renderGridContent start',data:{gridContentElExists:!!gridContentEl,loadingIndicatorExists:!!loadingIndicatorEl},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'K'})}).catch(()=>{});
+    // #endregion
+    
+    // Clear grid content but preserve loading indicator (it's in parent)
     gridContentEl.innerHTML = "";
     const allImages = getAllImagesRaw();
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:797',message:'Grid cleared, images count',data:{allImagesCount:allImages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'K'})}).catch(()=>{});
+    // #endregion
 
     let filtered = allImages.filter((img) => {
         const rating = getRatingForImage(img);
@@ -791,6 +975,57 @@ function renderGridContent() {
         }
     }
 
+    // Initialize loading progress tracking
+    // Cancel any pending hide timer when re-rendering
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+    }
+    
+    // Clear any existing progress timeout
+    if (imageLoadProgress.progressTimeout) {
+        clearTimeout(imageLoadProgress.progressTimeout);
+        imageLoadProgress.progressTimeout = null;
+    }
+    
+    imageLoadProgress.total = flatList.length;
+    imageLoadProgress.loaded = 0;
+    imageLoadProgress.failed = 0;
+    imageLoadProgress.visible = 0;
+    imageLoadProgress.currentImage = null;
+    imageLoadProgress.imageElements.clear();
+    
+    // Set a safety timeout to hide loading indicator if it gets stuck
+    // This prevents the loading bar from freezing indefinitely
+    imageLoadProgress.progressTimeout = setTimeout(() => {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:895',message:'Progress timeout - forcing hide',data:{loaded:imageLoadProgress.loaded,visible:imageLoadProgress.visible,total:imageLoadProgress.total},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'X'})}).catch(()=>{});
+        // #endregion
+        if (imageLoadProgress.loaded > 0) {
+            // If some images loaded, hide the indicator (they'll continue loading in background)
+            hideLoadingIndicator();
+        }
+        imageLoadProgress.progressTimeout = null;
+    }, 10000); // 10 second timeout
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:886',message:'Initializing progress tracking',data:{flatListLength:flatList.length,previousLoaded:imageLoadProgress.loaded},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'L'})}).catch(()=>{});
+    // #endregion
+    
+    if (flatList.length > 0) {
+        // Ensure loading indicator exists and is visible
+        if (!loadingIndicatorEl) {
+            createLoadingIndicator();
+        }
+        showLoadingIndicator();
+        updateLoadingProgress(0, flatList.length, null, `Ready to load ${flatList.length} images (scroll to load more)...`);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:900',message:'Loading indicator shown',data:{loadingIndicatorExists:!!loadingIndicatorEl,display:loadingIndicatorEl?.style.display},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'M'})}).catch(()=>{});
+        // #endregion
+    } else {
+        hideLoadingIndicator();
+    }
+    
     let index = 0;
     if (pageMode) {
         let perSectionMinHeight = baseThumbWidth + 80;
@@ -848,6 +1083,11 @@ function renderGridContent() {
                 const card = createCard(img, index);
                 gridContentEl.appendChild(card);
                 index++;
+                // #region agent log
+                if (index <= 5 || index % 10 === 0) { // Log first 5 and every 10th
+                    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:950',message:'Card created and appended',data:{index,imageName:img.filename||img.relpath,gridContentElChildren:gridContentEl.children.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'O'})}).catch(()=>{});
+                }
+                // #endregion
             });
         });
     }
@@ -935,23 +1175,47 @@ function createCard(img, index) {
     const imgEl = document.createElement("img");
 
     // Build safest thumbnail URL we can
+    // Always use relpath if available to ensure correct thumbnail mapping
+    const rel = img.relpath || img.filename || "";
     let thumbUrl =
         img.thumb_url ||
-        img.url || // backend already gave us a working URL
         (() => {
-        const rel = img.relpath || img.filename || "";
-        const encoded = encodeURIComponent(rel);
-        return `${API_ENDPOINTS.IMAGE}?filename=${encoded}&size=thumb`;
+            if (rel) {
+                const encoded = encodeURIComponent(rel);
+                return `${API_ENDPOINTS.IMAGE}?filename=${encoded}&size=thumb`;
+            }
+            return img.url || ""; // Fallback to full URL if no relpath
         })();
 
-        // 🔹 Register thumbnail so Details & History can reuse it
-        if (imageKey && thumbUrl) {
-            registerThumbnail(imageKey, thumbUrl);
-        }
+    // #region agent log
+    if (index < 5 || index % 20 === 0) { // Log first 5 and every 20th
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1133',message:'Thumbnail URL generated',data:{imageName:img.filename||img.relpath,relpath:img.relpath,thumbUrl,imageKey,hasThumbUrl:!!img.thumb_url},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'AC'})}).catch(()=>{});
+    }
+    // #endregion
+
+    // 🔹 Register thumbnail so Details & History can reuse it
+    if (imageKey && thumbUrl) {
+        registerThumbnail(imageKey, thumbUrl);
+    }
 
     imgEl.alt = img.filename || img.relpath || "";
     imgEl.loading = "lazy";
     imgEl.decoding = "async";
+    
+    // Check if this is a large image - if so, optimize loading
+    const imageSize = img.file_size || img.size || img.bytes || 0;
+    const isLargeImage = imageSize > 10 * 1024 * 1024; // > 10MB
+    
+    if (isLargeImage) {
+        // Use will-change hint for large images
+        imgEl.style.willChange = "contents";
+        // Ensure we're using thumbnail, not full-size
+        if (!thumbUrl.includes("size=thumb") && !thumbUrl.includes("_thumbs")) {
+            const rel = img.relpath || img.filename || "";
+            const encoded = encodeURIComponent(rel);
+            thumbUrl = `${API_ENDPOINTS.IMAGE}?filename=${encoded}&size=thumb`;
+        }
+    }
 
     Object.assign(imgEl.style, {
         width: "100%",
@@ -963,27 +1227,178 @@ function createCard(img, index) {
         transition: "opacity 0.2s ease",
     });
     
+    // Track image loading progress
+    const imageName = img.filename || img.relpath || "Unknown";
+    const loadStartTime = Date.now();
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:972',message:'Image load start',data:{imageName,thumbUrl,index},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
+    // Track this image element
+    imageLoadProgress.imageElements.set(imageName, imgEl);
+    
     // Use IntersectionObserver for better performance with large grids
     if ("IntersectionObserver" in window) {
         const observer = new IntersectionObserver((entries) => {
             entries.forEach((entry) => {
                 if (entry.isIntersecting) {
                     if (!imgEl.src) {
+                        imageLoadProgress.visible++;
+                        // #region agent log
+                        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1055',message:'Image intersecting, setting src',data:{imageName,thumbUrl,isIntersecting:entry.isIntersecting,intersectionRatio:entry.intersectionRatio,visible:imageLoadProgress.visible},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'P'})}).catch(()=>{});
+                        // #endregion
                         imgEl.src = thumbUrl;
+                        updateLoadingProgress(
+                            imageLoadProgress.loaded,
+                            imageLoadProgress.total,
+                            imageName,
+                            `Loading: ${imageName}`
+                        );
+                        
+                        // Check if image is already cached (browser cache)
+                        // If so, trigger onload immediately after a small delay
+                        // This ensures the onload handler is set up first
+                        setTimeout(() => {
+                            if (imgEl.complete && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                                // Image was cached, trigger onload manually
+                                if (imgEl.onload) {
+                                    imgEl.onload();
+                                }
+                            }
+                        }, 10);
                     }
                     observer.unobserve(imgEl);
                 }
             });
         }, { rootMargin: "50px" });
         
+        // Store observer on element for potential cleanup
+        imgEl._intersectionObserver = observer;
         observer.observe(imgEl);
+        
+        // #region agent log
+        if (index < 5) { // Log first few
+            fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1080',message:'IntersectionObserver created and attached',data:{imageName,index,hasObserver:!!imgEl._intersectionObserver},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'Q'})}).catch(()=>{});
+        }
+        // #endregion
     } else {
-        // Fallback for browsers without IntersectionObserver
+        // Fallback for browsers without IntersectionObserver - load immediately
+        imageLoadProgress.visible++;
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1088',message:'No IntersectionObserver, setting src immediately',data:{imageName,thumbUrl,visible:imageLoadProgress.visible},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'S'})}).catch(()=>{});
+        // #endregion
         imgEl.src = thumbUrl;
+        updateLoadingProgress(
+            imageLoadProgress.loaded,
+            imageLoadProgress.total,
+            imageName,
+            `Loading: ${imageName}`
+        );
     }
     
     imgEl.onload = () => {
-        imgEl.style.opacity = "1";
+        const loadTime = Date.now() - loadStartTime;
+        imageLoadProgress.loaded++;
+        
+        // Remove will-change after load to free resources
+        if (imgEl.style.willChange === "contents") {
+            requestAnimationFrame(() => {
+                imgEl.style.willChange = "auto";
+            });
+        }
+        
+        // #region agent log
+        const imageSize = img.file_size || img.size || 0;
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1200',message:'Image loaded',data:{imageName,loadTime,imageSize,loaded:imageLoadProgress.loaded,visible:imageLoadProgress.visible,total:imageLoadProgress.total},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'I'})}).catch(()=>{});
+        // #endregion
+        
+        // Use requestAnimationFrame to avoid blocking main thread
+        requestAnimationFrame(() => {
+            imgEl.style.opacity = "1";
+        });
+        
+        const visibleTotal = imageLoadProgress.visible || imageLoadProgress.total;
+        updateLoadingProgress(
+            imageLoadProgress.loaded,
+            imageLoadProgress.total,
+            null,
+            `Loaded ${imageLoadProgress.loaded}/${visibleTotal} visible images`
+        );
+        
+        // Hide loading indicator when all visible images have been attempted (loaded or failed)
+        // CRITICAL: Account for failed images (e.g., deleted files) so progress bar completes
+        const attempted = imageLoadProgress.loaded + imageLoadProgress.failed;
+        if (attempted >= visibleTotal && visibleTotal > 0) {
+            // Clear safety timeout since we're completing normally
+            if (imageLoadProgress.progressTimeout) {
+                clearTimeout(imageLoadProgress.progressTimeout);
+                imageLoadProgress.progressTimeout = null;
+            }
+            
+            // Cancel any previous hide timer
+            if (debounceTimer) {
+                clearTimeout(debounceTimer);
+            }
+            debounceTimer = setTimeout(() => {
+                // Double-check before hiding - ensure all visible images have been attempted
+                const currentAttempted = imageLoadProgress.loaded + imageLoadProgress.failed;
+                if (currentAttempted >= imageLoadProgress.visible && 
+                    imageLoadProgress.visible > 0) {
+                    hideLoadingIndicator();
+                }
+                debounceTimer = null;
+            }, 500);
+        }
+    };
+    
+    // Handle cached images - if image is already loaded, trigger onload immediately
+    if (imgEl.complete && imgEl.naturalWidth > 0) {
+        // Image is already cached and loaded
+        setTimeout(() => {
+            if (imgEl.complete) {
+                imgEl.onload();
+            }
+        }, 0);
+    }
+    
+    imgEl.onerror = () => {
+        imageLoadProgress.failed++;
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1092',message:'Image load error',data:{imageName,thumbUrl,failed:imageLoadProgress.failed},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'J'})}).catch(()=>{});
+        // #endregion
+        updateLoadingProgress(
+            imageLoadProgress.loaded,
+            imageLoadProgress.total,
+            null,
+            `Error loading ${imageName} (${imageLoadProgress.failed} failed)`
+        );
+        
+        // CRITICAL: Check if all visible images have been attempted (loaded or failed)
+        // This ensures progress bar completes even when images are deleted
+        const visibleTotal = imageLoadProgress.visible || imageLoadProgress.total;
+        const attempted = imageLoadProgress.loaded + imageLoadProgress.failed;
+        if (attempted >= visibleTotal && visibleTotal > 0) {
+            // Clear safety timeout since we're completing normally
+            if (imageLoadProgress.progressTimeout) {
+                clearTimeout(imageLoadProgress.progressTimeout);
+                imageLoadProgress.progressTimeout = null;
+            }
+            
+            // Cancel any previous hide timer
+            if (debounceTimer) {
+                clearTimeout(debounceTimer);
+            }
+            debounceTimer = setTimeout(() => {
+                // Double-check before hiding - ensure all visible images have been attempted
+                const currentAttempted = imageLoadProgress.loaded + imageLoadProgress.failed;
+                if (currentAttempted >= imageLoadProgress.visible && 
+                    imageLoadProgress.visible > 0) {
+                    hideLoadingIndicator();
+                }
+                debounceTimer = null;
+            }, 500);
+        }
     };
     frame.appendChild(imgEl);
 
@@ -1048,6 +1463,11 @@ function createCard(img, index) {
         
         // Regular click: open details
         const finalIndex = Number(card.dataset.index);
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'grid.js:1250',message:'Card clicked, opening details',data:{index:finalIndex,imageName:img.filename||img.relpath,relpath:img.relpath,thumbUrl,imageUrl:img.url},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'AD'})}).catch(()=>{});
+        // #endregion
+        
         setSelectedIndex(finalIndex);
         showDetailsForIndex(finalIndex);
     });

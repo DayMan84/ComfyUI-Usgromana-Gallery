@@ -680,8 +680,20 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
         thumbs_dir = os.path.join(base_output, "_thumbs")
         os.makedirs(thumbs_dir, exist_ok=True)
 
-        # Avoid any directory tricks by only using basename
-        thumb_name = os.path.basename(filename)
+        # Use a unique identifier for thumbnails to avoid collisions
+        # CRITICAL FIX: Use relpath hash to prevent same-filename collisions across folders
+        # If filename is just a basename, use it directly (backward compatible)
+        # If filename is a relpath, create a hash-based name to avoid collisions
+        import hashlib
+        if "/" in filename or "\\" in filename:
+            # It's a relpath - create unique hash-based name
+            # Use first 16 chars of MD5 hash + original extension
+            relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
+            original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
+            thumb_name = f"{relpath_hash}{original_ext}"
+        else:
+            # Just a filename, use it directly (backward compatible for root-level images)
+            thumb_name = os.path.basename(filename)
         thumb_path = os.path.join(thumbs_dir, thumb_name)
 
         # Check NSFW before serving or generating thumbnail
@@ -723,10 +735,11 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
 
             if needs_regen:
                 with Image.open(safe_path) as im:
-                    # Preserve aspect, cap the longest side
-                    im.thumbnail((512, 512))
+                    # Reduce thumbnail size for faster loading (256px instead of 512px)
+                    # This significantly reduces file size and generation time
+                    im.thumbnail((256, 256), Image.Resampling.LANCZOS)
                     # Save as PNG regardless of original type
-                    im.save(thumb_path, format="PNG")
+                    im.save(thumb_path, format="PNG", optimize=True)
 
             return web.FileResponse(path=thumb_path)
         except Exception as e:
@@ -751,7 +764,11 @@ async def gallery_batch_delete(request: web.Request) -> web.Response:
             return _json({"ok": False, "error": "filenames must be a list"}, status=400)
         
         output_dir = get_output_dir()
+        thumbs_dir = os.path.join(output_dir, "_thumbs")
+        # Ensure thumbs directory exists (might not if no thumbnails generated yet)
+        os.makedirs(thumbs_dir, exist_ok=True)
         deleted = []
+        deleted_thumbs = []
         errors = []
         
         for filename in filenames:
@@ -764,15 +781,99 @@ async def gallery_batch_delete(request: web.Request) -> web.Response:
                 continue
             
             try:
+                # Delete the main image file
                 if os.path.isfile(safe_path):
                     os.remove(safe_path)
                     deleted.append(filename)
+                    
+                    # CRITICAL: Also delete the corresponding thumbnail
+                    # Use the same naming logic as thumbnail generation
+                    # For root-level images, try both basename and hash-based name (in case thumbnails were generated with different logic)
+                    # Initialize variables in case of exception
+                    thumb_name = os.path.basename(filename)  # Default fallback
+                    thumb_path = os.path.join(thumbs_dir, thumb_name)
+                    thumb_found = None
+                    thumb_candidates = [thumb_name]
+                    
+                    try:
+                        import hashlib
+                        thumb_candidates = []  # List of possible thumbnail names to try
+                        
+                        if "/" in filename or "\\" in filename:
+                            # It's a relpath - create unique hash-based name
+                            relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
+                            original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
+                            thumb_name = f"{relpath_hash}{original_ext}"
+                            thumb_candidates.append(thumb_name)
+                        else:
+                            # Root-level image: try both basename and hash-based name
+                            # First try basename (current logic)
+                            thumb_name_basename = os.path.basename(filename)
+                            thumb_candidates.append(thumb_name_basename)
+                            
+                            # Also try hash-based name (in case thumbnail was generated with hash)
+                            relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
+                            original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
+                            thumb_name_hash = f"{relpath_hash}{original_ext}"
+                            thumb_candidates.append(thumb_name_hash)
+                            
+                            # Use basename as primary (for logging)
+                            thumb_name = thumb_name_basename
+                        
+                        # Try each candidate until we find the thumbnail
+                        thumb_path = None
+                        thumb_found = None
+                        for candidate in thumb_candidates:
+                            candidate_path = os.path.join(thumbs_dir, candidate)
+                            if os.path.isfile(candidate_path):
+                                thumb_path = candidate_path
+                                thumb_found = candidate
+                                break
+                        
+                        # If not found, use the first candidate as default (for logging)
+                        if thumb_path is None:
+                            thumb_path = os.path.join(thumbs_dir, thumb_candidates[0])
+                            thumb_found = None
+                        else:
+                            # Update thumb_name to the found one for logging
+                            thumb_name = thumb_found
+                    except Exception as thumb_name_err:
+                        # Fallback: use basename if calculation fails
+                        thumb_name = os.path.basename(filename)
+                        thumb_path = os.path.join(thumbs_dir, thumb_name)
+                        thumb_found = None
+                        thumb_candidates = [thumb_name]
+                        print(f"[Usgromana-Gallery] Warning: Error calculating thumbnail name for '{filename}': {thumb_name_err}")
+                    
+                    # Try to delete thumbnail if it exists
+                    # thumb_found is set above - if None, thumbnail wasn't found in candidates
+                    thumb_exists = thumb_found is not None
+                    if not thumb_exists and os.path.isdir(thumbs_dir):
+                            # Try case-insensitive search in thumbs directory (Windows)
+                            try:
+                                for existing_thumb in os.listdir(thumbs_dir):
+                                    if existing_thumb.lower() == thumb_name.lower():
+                                        thumb_path = os.path.join(thumbs_dir, existing_thumb)
+                                        thumb_exists = True
+                                        break
+                            except OSError:
+                                pass
+                    
+                    # Delete thumbnail if it exists (either found at expected path or via case-insensitive search)
+                    if thumb_exists or os.path.isfile(thumb_path):
+                            try:
+                                os.remove(thumb_path)
+                                deleted_thumbs.append(thumb_name)
+                            except OSError as thumb_err:
+                                # Non-fatal - log but don't fail the deletion
+                                print(f"[Usgromana-Gallery] Warning: Failed to delete thumbnail '{thumb_name}': {thumb_err}")
             except OSError as e:
                 errors.append(f"{filename}: {str(e)}")
         
         return _json({
             "ok": True,
             "deleted": deleted,
+            "deleted_thumbs": deleted_thumbs,
             "errors": errors,
             "count": len(deleted),
         })
@@ -1522,6 +1623,110 @@ async def gallery_get_settings(request: web.Request) -> web.Response:
                 settings = json.load(f) or {}
                 return _json({"ok": True, "settings": settings})
         return _json({"ok": True, "settings": {}})
+    except Exception as e:
+        return _json({"ok": False, "error": str(e)}, status=500)
+
+
+@PromptServer.instance.routes.post(f"{ROUTE_PREFIX}/batch/generate-thumbnails")
+async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Response:
+    """
+    Pre-generate thumbnails for multiple images in the background.
+    Body: { "filenames": ["path1", "path2", ...] } or empty to generate all.
+    Returns immediately, thumbnails are generated asynchronously.
+    """
+    try:
+        body = await request.json() if request.content_length else {}
+        filenames = body.get("filenames", [])
+        
+        # If no filenames provided, generate for all images
+        if not filenames:
+            images = list_output_images(extensions=_current_extensions)
+            filenames = [img.relpath for img in images]
+        
+        base_output = get_output_dir()
+        thumbs_dir = os.path.join(base_output, "_thumbs")
+        os.makedirs(thumbs_dir, exist_ok=True)
+        
+        generated = 0
+        skipped = 0
+        errors = []
+        
+        # Generate thumbnails synchronously but in batches to avoid blocking too long
+        # Use asyncio.to_thread for CPU-bound work to avoid blocking the event loop
+        import asyncio
+        
+        def generate_thumb_sync(filename):
+            try:
+                safe_path = _safe_join_output(filename)
+                if not safe_path:
+                    return None
+                
+                # Use same unique naming scheme as main thumbnail endpoint
+                import hashlib
+                if "/" in filename or "\\" in filename:
+                    relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
+                    original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
+                    thumb_name = f"{relpath_hash}{original_ext}"
+                else:
+                    thumb_name = os.path.basename(filename)
+                thumb_path = os.path.join(thumbs_dir, thumb_name)
+                
+                # Check if regeneration needed
+                needs_regen = (
+                    not os.path.isfile(thumb_path)
+                    or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
+                )
+                
+                if needs_regen:
+                    with Image.open(safe_path) as im:
+                        # Use smaller size for faster generation and loading
+                        im.thumbnail((256, 256), Image.Resampling.LANCZOS)
+                        im.save(thumb_path, format="PNG", optimize=True)
+                    return "generated"
+                else:
+                    return "skipped"
+            except Exception as e:
+                return f"error: {str(e)}"
+        
+        # Process in batches of 5 to avoid blocking the event loop too long
+        batch_size = 5
+        for i in range(0, len(filenames), batch_size):
+            batch = filenames[i:i + batch_size]
+            # Run CPU-bound work in thread pool
+            # Use asyncio.to_thread if available (Python 3.9+), otherwise use loop.run_in_executor
+            if hasattr(asyncio, 'to_thread'):
+                results = await asyncio.gather(*[
+                    asyncio.to_thread(generate_thumb_sync, f) for f in batch
+                ], return_exceptions=True)
+            else:
+                # Fallback for Python < 3.9
+                loop = asyncio.get_event_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+                    results = await asyncio.gather(*[
+                        loop.run_in_executor(executor, generate_thumb_sync, f) for f in batch
+                    ], return_exceptions=True)
+            
+            for result in results:
+                if result == "generated":
+                    generated += 1
+                elif result == "skipped":
+                    skipped += 1
+                elif isinstance(result, str) and result.startswith("error:"):
+                    errors.append(result)
+                elif isinstance(result, Exception):
+                    errors.append(str(result))
+            
+            # Small delay between batches to keep system responsive
+            await asyncio.sleep(0.05)
+        
+        return _json({
+            "ok": True,
+            "generated": generated,
+            "skipped": skipped,
+            "total": len(filenames),
+            "errors": errors[:10]  # Limit error list
+        })
     except Exception as e:
         return _json({"ok": False, "error": str(e)}, status=500)
 

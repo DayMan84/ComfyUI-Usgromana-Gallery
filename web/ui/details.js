@@ -2,7 +2,7 @@
 // Persistent details overlay + 3-image viewer (1 full + 2 thumbs)
 // Details NEVER generates thumbnails. It only reuses thumbs registered by the grid/state.
 
-import { getImages } from "../core/state.js";
+import { getImages, setImages, resetGridHasSetVisibleImagesFlag } from "../core/state.js";
 import { galleryApi } from "../core/api.js";
 import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
@@ -43,6 +43,23 @@ let currentImageInfo = null;
 let metadataVisible = false;
 let leftTargetIndex = null;
 let rightTargetIndex = null;
+
+// Navigation sequence counter to prevent race conditions from concurrent showDetailsForIndex calls
+let detailsNavSeq = 0;
+
+// Track pending unload operations to prevent stale callbacks from unloading the current image
+let pendingUnload = { idleId: null, timeoutId: null };
+
+function cancelPendingUnload() {
+    if (pendingUnload.idleId != null && "cancelIdleCallback" in window) {
+        cancelIdleCallback(pendingUnload.idleId);
+    }
+    if (pendingUnload.timeoutId != null) {
+        clearTimeout(pendingUnload.timeoutId);
+    }
+    pendingUnload.idleId = null;
+    pendingUnload.timeoutId = null;
+}
 
 // permissions
 let currentUser = null;
@@ -365,10 +382,13 @@ function createSideTile(side) {
 
 function navigateRelative(delta) {
     const items = getImages();
-    if (!items.length) return;
+    if (!items.length) {
+        return;
+    }
     const len = items.length;
 
     const nextIndex = currentIndex == null ? 0 : ((currentIndex + delta) % len + len) % len;
+    
     showDetailsForIndex(nextIndex);
 }
 
@@ -399,54 +419,445 @@ function resizeCardToImage() {
 // Show / hide
 // --------------------------
 export async function showDetailsForIndex(index) {
+    // CRITICAL: Increment navigation sequence to invalidate any stale concurrent calls
+    const navSeq = ++detailsNavSeq;
+    const stillCurrent = () => navSeq === detailsNavSeq;
+    
     if (!modalEl) initDetails();
+    
+    // Check if this call is still current before proceeding
+    if (!stillCurrent()) {
+        return;
+    }
 
     const items = getImages();
-    if (!items.length) return;
+    if (!items.length) {
+        return;
+    }
 
     const len = items.length;
     currentIndex = ((index % len) + len) % len;
 
     const imgInfo = items[currentIndex];
+    if (!imgInfo) {
+        return;
+    }
+    
+    // CRITICAL FIX: Capture previous image info BEFORE overwriting currentImageInfo
+    // This is needed for proper collision detection (same filename, different folder)
+    const prevImageInfo = currentImageInfo;
     currentImageInfo = imgInfo;
+    
+
+    // Unload previous image to free memory (especially important for large images)
+    // CRITICAL FIX: Guard unload to prevent stale callbacks from unloading the current image
+    // Capture the src to unload and navSeq BEFORE checking, so we only unload what we intended
+    if (imgEl && imgEl.src) {
+        const srcToUnload = imgEl.src;  // Capture what "previous" actually was
+        const seqToUnload = navSeq;     // Tie cleanup to this navigation
+        
+        // Cancel any older scheduled unloads (they're stale by definition)
+        cancelPendingUnload();
+        
+        // Only unload if this is actually a different image (not the same URL)
+        if (srcToUnload !== currentImageUrl) {
+            const prevSize = prevImageInfo?.file_size || prevImageInfo?.size || 0;
+            
+            // Safe unload function: only unloads if still the intended image and navigation
+            const safeUnload = () => {
+                // Only unload if:
+                // 1) this navigation is still current (no newer navigation occurred)
+                // 2) the element is STILL showing the old src we captured (not the new image)
+                if (seqToUnload !== detailsNavSeq) {
+                    return;
+                }
+                if (!imgEl || imgEl.src !== srcToUnload) {
+                    return;
+                }
+                unloadImage(imgEl);
+            };
+            
+            // Use requestIdleCallback to unload when browser is idle
+            if ('requestIdleCallback' in window) {
+                pendingUnload.idleId = requestIdleCallback(safeUnload, { timeout: 150 });
+            } else {
+                // Fallback: unload after a short delay
+                pendingUnload.timeoutId = setTimeout(safeUnload, 75);
+            }
+        }
+    }
+
+    // Show modal immediately for instant feedback
+    modalEl.style.display = "flex";
+    
+    // Show loading indicator in center image
+    if (imgEl) {
+        imgEl.style.opacity = "0.3";
+        // Add loading spinner overlay
+        let loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (!loadingSpinner && cardEl) {
+            loadingSpinner = document.createElement("div");
+            loadingSpinner.className = "details-loading-spinner";
+            Object.assign(loadingSpinner.style, {
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "40px",
+                height: "40px",
+                border: "3px solid rgba(56,189,248,0.3)",
+                borderTop: "3px solid rgba(56,189,248,0.9)",
+                borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+                zIndex: "10",
+                pointerEvents: "none",
+            });
+            // Add spin animation if not exists
+            if (!document.getElementById("details-spinner-style")) {
+                const style = document.createElement("style");
+                style.id = "details-spinner-style";
+                style.textContent = `@keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }`;
+                document.head.appendChild(style);
+            }
+            cardEl.appendChild(loadingSpinner);
+        }
+        if (loadingSpinner) loadingSpinner.style.display = "block";
+    }
 
     // ensure/merge metadata
+    // CRITICAL: Check if still current before and after await to prevent stale calls from proceeding
+    if (!stillCurrent()) return;
     await ensureHistoryMarker(imgInfo);
+    if (!stillCurrent()) return;
 
     // MAIN IMAGE: full-res only here (no thumb fallbacks)
+    // Ensure we always use the full-size image, never thumbnails
+    // CRITICAL: Always use relpath (includes folder) to avoid URL collisions for same-named files in different folders
     const rel = imgInfo.relpath || imgInfo.filename || "";
-    const newImageUrl = imgInfo.url || `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    
+    // ALWAYS reconstruct URL from relpath to ensure uniqueness and avoid collisions
+    // Don't trust imgInfo.url as it might have been constructed from filename only
+    let newImageUrl = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    
+    // Remove any size=thumb parameter if present (shouldn't happen, but safety check)
+    if (newImageUrl.includes("size=thumb")) {
+        newImageUrl = newImageUrl.replace(/[?&]size=thumb/, "").replace(/&$/, "");
+    }
+    
+    // Ensure we're not using a thumbnail URL (shouldn't happen, but safety check)
+    if (newImageUrl.includes("_thumbs") || newImageUrl.includes("/thumb")) {
+        // Reconstruct URL without thumb path - ALWAYS use relpath to ensure uniqueness
+        newImageUrl = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}`;
+    }
+    
+    // Check if URL is the same as previous (potential collision issue)
+    const urlChanged = newImageUrl !== currentImageUrl;
+    
     
     // Reset zoom and drag when switching images
     resetZoomAndDrag();
     
+    // CRITICAL FIX: Only clear src if there's a potential collision (same filename)
+    // This prevents browser from using cached image when navigating between images
+    // with the same name but different folder paths, while avoiding unnecessary
+    // clearing that could break normal navigation
+    // Use prevImageInfo (captured before overwriting currentImageInfo) for collision detection
+    const currentFilename = prevImageInfo?.filename || "";
+    const newFilename = imgInfo.filename || "";
+    // Extract filename from currentImageUrl if prevImageInfo isn't available
+    // Match the actual filename at the end of the path (after the last /)
+    const urlFilename = currentImageUrl ? currentImageUrl.match(/[^/]+\.(png|jpg|jpeg|webp|gif|bmp)(?:\?|$)/i)?.[0] : "";
+    const checkFilename = currentFilename || urlFilename;
+    // Only consider it a collision if:
+    // 1. Both filenames exist and are the same
+    // 2. The URL actually changed (different paths)
+    // 3. We have a valid filename to check
+    const potentialCollision = checkFilename && newFilename && 
+                                checkFilename === newFilename && 
+                                urlChanged &&
+                                currentImageUrl !== newImageUrl;
+    
+    if (potentialCollision && imgEl && imgEl.src) {
+        // CRITICAL: Check if still current before doing destructive src clearing
+        if (!stillCurrent()) return;
+        
+        const oldSrc = imgEl.src;
+        // Clear src to force browser to recognize new image
+        imgEl.src = "";
+        imgEl.removeAttribute("src");
+        // Small delay to ensure browser processes the src clearing
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        // CRITICAL: Check if still current after await - another navigation may have occurred
+        if (!stillCurrent()) {
+            return;
+        }
+        
+    } else if (!potentialCollision && imgEl && imgEl.src) {
+    }
+    
     // Always update image URL (even if same, to ensure it displays)
-    currentImageUrl = newImageUrl;
+    // CRITICAL: If URL is the same as current src, we need to force a reload
+    // This happens when navigating back to a previously viewed image
+    const needsForceReload = imgEl.src && (imgEl.src === newImageUrl || imgEl.src.endsWith(newImageUrl));
+    
+    // CRITICAL FIX: If needsForceReload is true, append a cache-buster to force browser to reload
+    // This ensures onload fires even when the browser thinks the image is already cached
+    let finalImageUrl = newImageUrl;
+    if (needsForceReload) {
+        finalImageUrl += (finalImageUrl.includes("?") ? "&" : "?") + "v=" + Date.now();
+    }
+    
+    currentImageUrl = finalImageUrl;
     
     // protect against out-of-order loads when navigating fast
     const loadToken = Symbol("details-load");
     imgEl._loadToken = loadToken;
+    imgEl._loadStartTime = Date.now();
+    
+    if (needsForceReload) {
+    }
 
     const handleImageLoad = () => {
-        if (imgEl._loadToken !== loadToken) return;
-        resizeCardToImage();
-        fillMetadata(imgInfo);
+        if (imgEl._loadToken !== loadToken) {
+            return;
+        }
+        
+        // CRITICAL: Validate image actually loaded - check dimensions
+        // If dimensions are 0x0, the image hasn't actually loaded yet
+        // This can happen when decode() resolves before image data is ready
+        if (imgEl.naturalWidth === 0 || imgEl.naturalHeight === 0) {
+            // Wait a bit and check again - if still 0x0, trigger actual load
+            setTimeout(() => {
+                // CRITICAL: Check if this navigation is still current before proceeding
+                if (!stillCurrent()) return;
+                
+                if (imgEl._loadToken === loadToken && (imgEl.naturalWidth === 0 || imgEl.naturalHeight === 0)) {
+                    // Image still not loaded - force reload by clearing and resetting src
+                    const oldSrc = imgEl.src;
+                    imgEl.src = "";
+                    imgEl.removeAttribute("src");
+                    setTimeout(() => {
+                        if (imgEl._loadToken === loadToken) {
+                            imgEl.src = currentImageUrl;
+                        }
+                    }, 10);
+                } else if (imgEl._loadToken === loadToken && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                    // Image now loaded - proceed with handler
+                    handleImageLoad();
+                }
+            }, 100);
+            return;
+        }
+        
+        const loadTime = Date.now() - (imgEl._loadStartTime || Date.now());
+        const imageSize = imgInfo.file_size || imgInfo.size || 0;
+        
+        
+        // Hide loading spinner
+        const loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (loadingSpinner) loadingSpinner.style.display = "none";
+        imgEl.style.opacity = "1";
+        
+        // Remove will-change after image loads to free resources
+        if (imgEl.style.willChange) {
+            // Defer removal to avoid layout thrashing
+            requestAnimationFrame(() => {
+                imgEl.style.willChange = "auto";
+            });
+        }
+        
+        // Use requestAnimationFrame for resize to avoid blocking
+        requestAnimationFrame(() => {
+            resizeCardToImage();
+            fillMetadata(imgInfo);
+        });
     };
 
     imgEl.onload = handleImageLoad;
     imgEl.onerror = () => {
+        const loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
+        if (loadingSpinner) loadingSpinner.style.display = "none";
+        imgEl.style.opacity = "1";
         console.warn("[UsgromanaGallery] Failed to load image:", currentImageUrl);
     };
 
-    // Always set src to ensure image updates
-    // This ensures arrow key navigation always updates the center image
-    imgEl.src = currentImageUrl;
+    // Check image size before loading - large images need special handling
+    const imageSize = imgInfo.file_size || imgInfo.size || imgInfo.bytes || 0;
+    const isLargeImage = imageSize > 10 * 1024 * 1024; // > 10MB
+    
+    
+    // For large images, use async decoding and defer non-critical operations
+    if (isLargeImage) {
+        // Use will-change to hint browser about upcoming changes
+        if (imgEl) {
+            imgEl.style.willChange = "contents";
+        }
+        
+        // Use Image.decode() API if available for async decoding
+        // This prevents blocking the main thread for large images
+        if ('decode' in imgEl) {
+            imgEl.src = currentImageUrl;
+            
+            // Check if image is already loaded (cached) - decode() might resolve immediately
+            if (imgEl.complete && imgEl.src === currentImageUrl) {
+            }
+            
+            // Use decode() to decode image off main thread
+            // CRITICAL: Store the current src when calling decode() to detect if it changed
+            // Also store the decode promise so we can track if it's still the current one
+            const decodeSrc = imgEl.src;
+            const decodePromise = imgEl.decode();
+            imgEl._decodePromise = decodePromise; // Store for tracking
+            imgEl._decodeSrc = decodeSrc; // Store src that decode() was called for
+            
+            decodePromise
+                .then(() => {
+                    // Only proceed if src hasn't changed (navigation hasn't occurred) and this is still the current decode promise
+                    if (imgEl._loadToken === loadToken && imgEl.src === decodeSrc && imgEl._decodePromise === decodePromise) {
+                        // Use requestAnimationFrame to avoid blocking
+                        requestAnimationFrame(() => {
+                            if (imgEl._loadToken === loadToken) { // Double-check token hasn't changed
+                                handleImageLoad();
+                            }
+                        });
+                    } else {
+                    }
+                })
+                .catch((err) => {
+                    // Only fallback to onload if src hasn't changed, token matches, and this is still the current decode promise
+                    // If any of these changed, it means navigation occurred and we should ignore this error
+                    if (imgEl._loadToken === loadToken && imgEl.src === decodeSrc && imgEl._decodePromise === decodePromise) {
+                        requestAnimationFrame(() => {
+                            if (imgEl._loadToken === loadToken) { // Double-check token
+                                handleImageLoad();
+                            }
+                        });
+                    } else {
+                        // This is a decode error from a previous image - ignore it silently
+                    }
+                });
+        } else {
+            // Fallback for browsers without decode API
+            // Use setTimeout to defer loading slightly and avoid blocking
+            setTimeout(() => {
+                imgEl.src = currentImageUrl;
+                // Check if already complete after setting src
+                if (imgEl.complete && imgEl.src === currentImageUrl) {
+                    setTimeout(() => {
+                        if (imgEl._loadToken === loadToken) {
+                            handleImageLoad();
+                        }
+                    }, 0);
+                }
+            }, 0);
+        }
+    } else {
+        // Small images can load normally
+        imgEl.src = currentImageUrl;
+    }
     
     // If image is already loaded (cached), trigger handler immediately
     // This handles the case where browser cache makes onload not fire
-    if (imgEl.complete) {
-        setTimeout(() => handleImageLoad(), 0);
-    }
+    // CRITICAL: Check complete AFTER setting src with a small delay to allow browser to update
+    // This is especially important when navigating back to previously viewed images
+    // Use a longer delay if src was cleared (potential collision) to allow browser to reload
+    // CRITICAL: When potentialCollision is true, src is cleared and then set again
+    // We need to wait longer to ensure src is actually set before checking
+    const delayAfterSrcClear = potentialCollision ? 200 : 50;
+    setTimeout(() => {
+        // CRITICAL: Check if this navigation is still current before proceeding
+        if (!stillCurrent()) {
+            return;
+        }
+        
+        const srcAfterSet = imgEl.src;
+        
+        
+        // CRITICAL: If src is empty, it means src was cleared but not set yet
+        // This can happen when potentialCollision triggers src clearing
+        // If src is still empty after delay, check again after a bit more time
+        if (!srcAfterSet || srcAfterSet === "" || srcAfterSet === window.location.href) {
+            // Retry after a bit more time - src should be set by now
+            // Use longer retry delay if potentialCollision was true
+            const retryDelay = potentialCollision ? 100 : 50;
+            setTimeout(() => {
+                // CRITICAL: Check if this navigation is still current before proceeding
+                if (!stillCurrent()) {
+                    return;
+                }
+                
+                const retrySrc = imgEl.src;
+                if (retrySrc && retrySrc !== "" && retrySrc !== window.location.href && imgEl._loadToken === loadToken) {
+                    // Normalize URLs for comparison
+                    const normalizeUrl = (url) => {
+                        if (!url) return "";
+                        try {
+                            if (url.startsWith("http://") || url.startsWith("https://")) {
+                                const urlObj = new URL(url);
+                                return urlObj.pathname + urlObj.search;
+                            }
+                            return url;
+                        } catch {
+                            return url;
+                        }
+                    };
+                    const normalizedRetrySrc = normalizeUrl(retrySrc);
+                    const normalizedCurrent = normalizeUrl(currentImageUrl);
+                    const srcMatches = normalizedRetrySrc === normalizedCurrent || 
+                                      normalizedRetrySrc.endsWith(normalizedCurrent) || 
+                                      normalizedCurrent.endsWith(normalizedRetrySrc) ||
+                                      retrySrc.includes(currentImageUrl) ||
+                                      currentImageUrl.includes(retrySrc);
+                    // Now check if image is complete
+                    if (imgEl.complete && srcMatches && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                        if (imgEl._loadToken === loadToken) {
+                            handleImageLoad();
+                        }
+                    }
+                }
+            }, 50); // Small additional delay
+            return; // Wait for retry or onload
+        }
+        
+        // Normalize URLs for comparison - extract the path+query part
+        const normalizeUrl = (url) => {
+            if (!url) return "";
+            try {
+                // If it's a full URL, extract pathname + search
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    const urlObj = new URL(url);
+                    return urlObj.pathname + urlObj.search;
+                }
+                // If it's a relative URL, use as-is
+                return url;
+            } catch {
+                // Fallback: just use the URL as-is
+                return url;
+            }
+        };
+        const normalizedSrc = normalizeUrl(srcAfterSet);
+        const normalizedCurrent = normalizeUrl(currentImageUrl);
+        // Check if src matches (accounting for URL encoding differences and full vs relative URLs)
+        const srcMatches = normalizedSrc === normalizedCurrent || 
+                          normalizedSrc.endsWith(normalizedCurrent) || 
+                          normalizedCurrent.endsWith(normalizedSrc) ||
+                          srcAfterSet.includes(currentImageUrl) ||
+                          currentImageUrl.includes(srcAfterSet);
+        
+        
+        if (imgEl.complete && srcMatches && imgEl._loadToken === loadToken) {
+            // Also validate dimensions are valid before considering it loaded
+            if (imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+                // For both large and small images, if they're cached, trigger handler
+                // But only if loadToken still matches (navigation hasn't changed)
+                if (imgEl._loadToken === loadToken) {
+                    handleImageLoad();
+                }
+            } else {
+            }
+        }
+    }, delayAfterSrcClear); // Delay longer if src was cleared
 
     // PREV/NEXT: thumbnails only, from state registry or existing thumb_url only.
     // Use the SAME items array that was used to calculate currentIndex
@@ -1534,13 +1945,46 @@ function addDeleteButton(imgInfo) {
             deleteBtn.style.opacity = "0.6";
             deleteBtn.style.cursor = "not-allowed";
             
-            await galleryApi.batchDelete([filename]);
+            const result = await galleryApi.batchDelete([filename]);
+            
+            // #region agent log
+            fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1948',message:'Image deleted successfully',data:{filename,deletedCount:result.count,deletedThumbs:result.deleted_thumbs?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'BX'})}).catch(()=>{});
+            // #endregion
+            
+            // CRITICAL: Immediately reload images to remove deleted image from grid
+            // This provides instant feedback instead of waiting for file monitor polling
+            try {
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1952',message:'Reloading images after deletion',data:{filename},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'BY'})}).catch(()=>{});
+                // #endregion
+                const images = await galleryApi.listImages();
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1955',message:'Images reloaded, updating state',data:{imageCount:images.length,filename},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'BZ'})}).catch(()=>{});
+                // #endregion
+                // CRITICAL: Reset the grid flag first to allow setImages to update visibleImages
+                // Then call setImages with resetVisible=true to ensure the grid sees the change
+                if (typeof window !== 'undefined' && window.__USG_GALLERY_GRID_INIT__) {
+                    // Reset the flag so setImages can update visibleImages
+                    resetGridHasSetVisibleImagesFlag();
+                }
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1970',message:'About to call setImages after deletion',data:{imageCount:images.length,prevImageCount:getImages().length},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CN'})}).catch(()=>{});
+                // #endregion
+                setImages(images, true); // Force reset to ensure grid sees the change
+                // Grid will auto-update via state subscription
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1974',message:'State updated, grid should re-render',data:{imageCount:images.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CA'})}).catch(()=>{});
+                // #endregion
+            } catch (reloadErr) {
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/53126dc7-8464-4cbf-a9de-c8319b36dae0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'details.js:1961',message:'Failed to reload images after deletion',data:{error:reloadErr.message,filename},timestamp:Date.now(),sessionId:'debug-session',runId:'run4',hypothesisId:'CB'})}).catch(()=>{});
+                // #endregion
+                console.warn("[UsgromanaGallery] Failed to reload images after deletion:", reloadErr);
+                // Non-fatal - file monitor will catch it eventually
+            }
             
             // Close details view
             hideDetails();
-            
-            // Reload images in grid (triggered by file monitor or manual refresh)
-            // The grid should automatically update when the file is deleted
         } catch (err) {
             console.error("[UsgromanaGallery] Failed to delete image:", err);
             alert(`Failed to delete image: ${err.message || "Unknown error"}`);

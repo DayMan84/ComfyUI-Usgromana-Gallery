@@ -221,6 +221,17 @@ export function showOverlay() {
     const el = ensureOverlay();
     if (!el) return;
     el.style.display = "flex";
+    
+    // Reload images when overlay is shown (in case it was closed and reopened)
+    // Only reload if grid is initialized and images haven't been loaded recently
+    if (typeof window !== 'undefined' && window.__USG_GALLERY_GRID_INIT__) {
+        // Small delay to ensure overlay is visible first
+        setTimeout(() => {
+            if (window.USG_GALLERY_RELOAD_IMAGES) {
+                window.USG_GALLERY_RELOAD_IMAGES();
+            }
+        }, 100);
+    }
 }
 
 export function openGalleryOverlay() {
