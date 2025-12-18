@@ -3,7 +3,7 @@
 
 import os
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 from pathlib import Path
 
 try:
@@ -13,7 +13,16 @@ try:
 except ImportError:
     WATCHDOG_AVAILABLE = False
     Observer = None
-    FileSystemEventHandler = None
+    # Create a dummy base class when watchdog is not available
+    class FileSystemEventHandler:
+        """Dummy base class when watchdog is not available."""
+        pass
+    # Define FileSystemEvent as None for type hints when watchdog is not available
+    FileSystemEvent = None
+
+# For type checking, ensure FileSystemEvent is available
+if TYPE_CHECKING:
+    from watchdog.events import FileSystemEvent
 
 
 class GalleryFileHandler(FileSystemEventHandler):
@@ -31,19 +40,19 @@ class GalleryFileHandler(FileSystemEventHandler):
         ext = os.path.splitext(path)[1].lower()
         return ext in self.extensions
     
-    def on_created(self, event: FileSystemEvent):
+    def on_created(self, event: "FileSystemEvent"):
         if not event.is_directory and self._is_relevant_file(event.src_path):
             self.callback("created", event.src_path)
     
-    def on_deleted(self, event: FileSystemEvent):
+    def on_deleted(self, event: "FileSystemEvent"):
         if not event.is_directory and self._is_relevant_file(event.src_path):
             self.callback("deleted", event.src_path)
     
-    def on_modified(self, event: FileSystemEvent):
+    def on_modified(self, event: "FileSystemEvent"):
         if not event.is_directory and self._is_relevant_file(event.src_path):
             self.callback("modified", event.src_path)
     
-    def on_moved(self, event: FileSystemEvent):
+    def on_moved(self, event: "FileSystemEvent"):
         if not event.is_directory:
             if self._is_relevant_file(event.src_path):
                 self.callback("deleted", event.src_path)

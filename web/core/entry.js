@@ -24,6 +24,7 @@ let hasCustomPosition = false;
 let resizeHandlerAttached = false;
 let isAnchored = false; 
 let anchorWatchInterval = null;
+let isUsingRadialMenu = false;
 
 // ---------------------------------------------------------
 // Image loading
@@ -170,6 +171,51 @@ function usgFindToolbarContainer(settings) {
 }
 
 // ---------------------------------------------------------
+// Radial menu integration
+// ---------------------------------------------------------
+function registerWithRadialMenu() {
+    if (isUsingRadialMenu) return true; // Already registered
+    
+    if (typeof window !== 'undefined' && window.UsgromanaRadialMenu) {
+        const settings = getGallerySettings();
+        const success = window.UsgromanaRadialMenu.register({
+            id: "usgromana-gallery",
+            label: "Gallery",
+            icon: "🖼️",
+            order: 10,
+            onClick: () => {
+                showOverlay();
+            }
+        });
+        
+        if (success) {
+            isUsingRadialMenu = true;
+            // Hide the physical button when using radial menu
+            if (launchBtn) {
+                launchBtn.style.display = "none";
+            }
+            logger.info("[UsgromanaGallery] Registered with Usgromana radial menu");
+            return true;
+        }
+    }
+    return false;
+}
+
+function unregisterFromRadialMenu() {
+    if (!isUsingRadialMenu) return;
+    
+    if (typeof window !== 'undefined' && window.UsgromanaRadialMenu) {
+        window.UsgromanaRadialMenu.unregister("usgromana-gallery");
+        isUsingRadialMenu = false;
+        // Show the physical button again
+        if (launchBtn) {
+            launchBtn.style.display = "";
+        }
+        logger.info("[UsgromanaGallery] Unregistered from Usgromana radial menu");
+    }
+}
+
+// ---------------------------------------------------------
 // Positioning / anchoring
 // ---------------------------------------------------------
 function applyButtonPosition(settings) {
@@ -179,50 +225,66 @@ function applyButtonPosition(settings) {
     const anchor = cfg?.anchorToManagerBar;
     const toolbar = usgFindToolbarContainer(cfg);
 
-    if (anchor && toolbar) {
-        // Re-parent into the toolbar, placing after Manager button if it exists
-        if (launchBtn.parentElement !== toolbar) {
-            const managerButton = toolbar.querySelector('button[aria-label="ComfyUI Manager"], button[title="ComfyUI Manager"]');
-            if (managerButton && managerButton.nextSibling) {
-                // Insert after Manager button
-                toolbar.insertBefore(launchBtn, managerButton.nextSibling);
-            } else if (managerButton) {
-                // Manager button exists but has no next sibling, append after it
-                managerButton.parentNode.insertBefore(launchBtn, managerButton.nextSibling);
-            } else {
-                // No Manager button found, just append to group
-                toolbar.appendChild(launchBtn);
-            }
+    if (anchor) {
+        // Try to use radial menu first
+        if (registerWithRadialMenu()) {
+            // Successfully registered with radial menu - hide physical button
+            isAnchored = true;
+            return;
         }
+        
+        // Radial menu not available, fall back to action bar docking
+        unregisterFromRadialMenu();
+        
+        if (toolbar) {
+            // Re-parent into the toolbar, placing after Manager button if it exists
+            if (launchBtn.parentElement !== toolbar) {
+                const managerButton = toolbar.querySelector('button[aria-label="ComfyUI Manager"], button[title="ComfyUI Manager"]');
+                if (managerButton && managerButton.nextSibling) {
+                    // Insert after Manager button
+                    toolbar.insertBefore(launchBtn, managerButton.nextSibling);
+                } else if (managerButton) {
+                    // Manager button exists but has no next sibling, append after it
+                    managerButton.parentNode.insertBefore(launchBtn, managerButton.nextSibling);
+                } else {
+                    // No Manager button found, just append to group
+                    toolbar.appendChild(launchBtn);
+                }
+            }
 
-        // Make it look like a native Comfy button
-        launchBtn.classList.add("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
+            // Make it look like a native Comfy button
+            launchBtn.classList.add("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
 
-        Object.assign(launchBtn.style, {
-            position: "relative",
-            top: "0",
-            left: "0",
-            right: "0",
-            bottom: "0",
-            marginLeft: "0px",
-            marginRight: "0",
-            transform: "none",
-            boxShadow: "none",   // flat in the bar
-            // Let Comfy's CSS handle background/border/etc:
-            borderRadius: "",
-            background: "",
-            border: "",
-            padding: "",
-            minWidth: "",
-            minHeight: "",
-            width: "",
-        });
+            Object.assign(launchBtn.style, {
+                position: "relative",
+                top: "0",
+                left: "0",
+                right: "0",
+                bottom: "0",
+                marginLeft: "0px",
+                marginRight: "0",
+                transform: "none",
+                boxShadow: "none",   // flat in the bar
+                // Let Comfy's CSS handle background/border/etc:
+                borderRadius: "",
+                background: "",
+                border: "",
+                padding: "",
+                minWidth: "",
+                minHeight: "",
+                width: "",
+                display: "", // Ensure visible when docked to action bar
+            });
 
-        hasCustomPosition = false;
-        isAnchored = true;
-        return;
+            hasCustomPosition = false;
+            isAnchored = true;
+            return;
+        }
     }
 
+    // Not anchored or toolbar not found - unregister from radial menu and show floating button
+    unregisterFromRadialMenu();
+    
     // Floating mode
     if (launchBtn.parentElement !== document.body) {
         document.body.appendChild(launchBtn);
@@ -233,6 +295,7 @@ function applyButtonPosition(settings) {
 
     launchBtn.style.position = "fixed";
     launchBtn.style.transform = "none";
+    launchBtn.style.display = ""; // Ensure visible in floating mode
 
     if (!hasCustomPosition) {
         Object.assign(launchBtn.style, {
@@ -256,22 +319,31 @@ function startAnchorWatch() {
         const anchor = cfg.anchorToManagerBar;
         const toolbar = usgFindToolbarContainer(cfg);
 
-        // If anchored, make sure we're inside the toolbar
-        if (anchor && toolbar) {
-            if (!toolbar.contains(launchBtn)) {
-                toolbar.appendChild(launchBtn);
-                applyButtonPosition(cfg);
+        // If anchored, check radial menu first, then fall back to toolbar
+        if (anchor) {
+            // Try radial menu first
+            if (typeof window !== 'undefined' && window.UsgromanaRadialMenu) {
+                if (!isUsingRadialMenu) {
+                    // Radial menu just became available, re-apply position
+                    applyButtonPosition(cfg);
+                }
+            } else if (toolbar) {
+                // Radial menu not available, use toolbar
+                if (!isUsingRadialMenu && !toolbar.contains(launchBtn)) {
+                    toolbar.appendChild(launchBtn);
+                    applyButtonPosition(cfg);
+                }
             }
         } else {
             // Not anchored → make sure we're back on the body (floating)
-            if (launchBtn.parentElement !== document.body) {
+            if (!isUsingRadialMenu && launchBtn.parentElement !== document.body) {
                 document.body.appendChild(launchBtn);
                 applyButtonPosition(cfg);
             }
         }
 
-        // Safety: if somehow removed entirely from DOM, re-attach
-        if (!document.body.contains(launchBtn)) {
+        // Safety: if somehow removed entirely from DOM, re-attach (unless using radial menu)
+        if (!isUsingRadialMenu && !document.body.contains(launchBtn)) {
             document.body.appendChild(launchBtn);
             applyButtonPosition(cfg);
         }
@@ -292,8 +364,8 @@ function makeButtonDraggable(btn) {
         if (ev.button !== 0) return;
 
         const settings = getGallerySettings();
-        if (settings.anchorToManagerBar) {
-            // When inside the toolbar, don't let the user drag it.
+        if (settings.anchorToManagerBar || isUsingRadialMenu) {
+            // When inside the toolbar or using radial menu, don't let the user drag it.
             return;
         }
 
@@ -391,7 +463,7 @@ function createFloatingButton() {
             "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 
         cursor: "pointer",
-        boxShadow: "0 8px 22px rgba(15,23,42,0.85)",
+        boxShadow: "0 2px 8px rgba(15,23,42,0.85)",
         userSelect: "none",
         WebkitUserSelect: "none",
         backdropFilter: "blur(4px)",
@@ -431,6 +503,14 @@ function createFloatingButton() {
             newSettings.theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
         applyButtonPosition(newSettings);
     });
+    
+    // Try to register with radial menu on initial load if anchoring is enabled
+    // Use a small delay to ensure radial menu API is loaded
+    if (settings.anchorToManagerBar) {
+        setTimeout(() => {
+            applyButtonPosition(settings);
+        }, 100);
+    }
 
     // Cleanup on button removal (if needed)
     if (btn.parentElement) {

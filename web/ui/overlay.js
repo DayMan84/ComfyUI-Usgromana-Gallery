@@ -88,12 +88,29 @@ function ensureOverlay() {
 
     const logoImg = document.createElement("img");
     logoImg.alt = "Usgromana Gallery Pro";
-    logoImg.src = ASSETS.DARK_LOGO;
+    
+    // Initialize logo based on current theme
+    const settings = getGallerySettings();
+    const isLightTheme = settings.theme === "light" || settings.theme === "lightSubtle";
+    logoImg.src = isLightTheme ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+    
     Object.assign(logoImg.style, {
         height: "18px",
         width: "auto",
         filter: `drop-shadow(0 0 6px ${theme.logoGlow})`,
     });
+    
+    // Handle image loading errors
+    logoImg.onerror = function() {
+        console.warn("[Usgromana-Gallery] Failed to load logo image:", this.src);
+        // Hide the image if it fails to load
+        this.style.display = "none";
+    };
+    
+    // Handle successful image load
+    logoImg.onload = function() {
+        this.style.display = "";
+    };
 
     const titleEl = document.createElement("div");
     titleEl.textContent = "USGROMANA GALLERY PRO";
@@ -254,7 +271,12 @@ function ensureOverlay() {
 
     // Theme/logo + remember last inline divider style
     subscribeGallerySettings((s) => {
-        logoImg.src = s.theme === "light" || s.theme === "lightSubtle" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        const newSrc = s.theme === "light" || s.theme === "lightSubtle" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        if (logoImg.src !== newSrc) {
+            // Reset display when changing src (in case it was hidden due to previous error)
+            logoImg.style.display = "";
+            logoImg.src = newSrc;
+        }
         if (s.dividerStyle && s.dividerStyle !== "page") {
             lastInlineDividerStyle = s.dividerStyle;
         }

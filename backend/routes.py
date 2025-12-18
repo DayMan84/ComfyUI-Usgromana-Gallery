@@ -565,11 +565,50 @@ def _apply_nsfw_filter(request: web.Request, images):
 # --- Static assets (icons, logos, etc.) ---------------------------
 
 # Serve files at: /usgromana-gallery/assets/<filename>
-PromptServer.instance.app.router.add_static(
-    f"{ROUTE_PREFIX}/assets",
-    ASSETS_DIR,
-    name="usgromana_gallery_assets",
-)
+try:
+    PromptServer.instance.app.router.add_static(
+        f"{ROUTE_PREFIX}/assets",
+        ASSETS_DIR,
+        name="usgromana_gallery_assets",
+    )
+    print(f"[Usgromana-Gallery] Static assets route registered: {ROUTE_PREFIX}/assets -> {ASSETS_DIR}")
+except Exception as e:
+    print(f"[Usgromana-Gallery] Warning: Failed to register static assets route: {e}")
+
+# Fallback route handler for assets (in case add_static doesn't work)
+@PromptServer.instance.routes.get(f"{ROUTE_PREFIX}/assets/{{filename}}")
+async def gallery_asset(request: web.Request) -> web.Response:
+    """Serve static assets like logos and icons."""
+    filename = request.match_info.get("filename", "")
+    if not filename:
+        return _json({"ok": False, "error": "Missing filename"}, status=400)
+    
+    # Security: only allow alphanumeric, dots, dashes, and underscores
+    if not all(c.isalnum() or c in ".-_" for c in filename):
+        return _json({"ok": False, "error": "Invalid filename"}, status=400)
+    
+    asset_path = os.path.join(ASSETS_DIR, filename)
+    
+    # Ensure the file is within the assets directory (prevent path traversal)
+    if not os.path.abspath(asset_path).startswith(os.path.abspath(ASSETS_DIR)):
+        return _json({"ok": False, "error": "Invalid path"}, status=403)
+    
+    if not os.path.isfile(asset_path):
+        return _json({"ok": False, "error": "File not found"}, status=404)
+    
+    # Determine content type based on extension
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".ico": "image/x-icon",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+    }.get(ext, "application/octet-stream")
+    
+    return web.FileResponse(path=asset_path, headers={"Content-Type": content_type})
 
 # --- Image listing & serving --------------------------------------
 

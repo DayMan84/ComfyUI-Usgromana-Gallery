@@ -168,5 +168,22 @@
     "folder": "2339fc4b-6588-4769-81eb-876276ae70ad",
     "prompt": null,
     "history_key": null
+  },
+  "50d2097b-a9c7-481a-8658-b13f54db5a63/ComfyUI_00003_.png": {
+    "tags": [
+      "Xmen",
+      "X-Men",
+      "Rogue",
+      "Super Hero",
+      "Cartoon",
+      "Fantasy",
+      "Woman",
+      "Powers"
+    ],
+    "display_name": null,
+    "rating": 4,
+    "folder": "50d2097b-a9c7-481a-8658-b13f54db5a63",
+    "prompt": null,
+    "history_key": null
   }
 }

@@ -1,21 +1,24 @@
 # ComfyUI-Usgromana-Gallery
 
-A comprehensive image gallery extension for ComfyUI that provides advanced image management, metadata editing, NSFW content filtering, and real-time file monitoring capabilities.
+A comprehensive image gallery extension for ComfyUI that provides advanced image management, metadata editing, NSFW content filtering, real-time file monitoring, and a full-featured file explorer.
 
 ## Overview
 
-ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interactive, feature-rich image gallery. It offers a modern web-based interface for browsing, organizing, rating, and managing generated images with support for user permissions, content filtering, and extensive metadata management.
+ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interactive, feature-rich image gallery. It offers a modern web-based interface for browsing, organizing, rating, and managing generated images with support for user permissions, content filtering, extensive metadata management, and a Windows Explorer-style file browser.
 
 ### Key Capabilities
 
 - **Image Gallery Viewing**: Browse all images in your ComfyUI output directory with thumbnails and full-screen viewing
+- **File Explorer**: Navigate your output directory with multiple view modes (Details, Small Icons, Medium Icons, Large Icons, Tiles)
 - **Metadata Management**: View and edit comprehensive image metadata including prompts, workflow data, generation parameters, and custom tags
 - **Rating System**: Rate images with a 5-star system that persists across sessions
 - **NSFW Content Filtering**: Integrates with ComfyUI-Usgromana NSFW API to automatically filter content based on user permissions
-- **File Management**: Rename and delete images directly from the gallery interface
+- **File Management**: Rename, delete, move, and organize files and folders directly from the interface
 - **Real-time Updates**: Automatically detects and displays new images as they are generated
 - **Batch Operations**: Download or delete multiple images at once
 - **Advanced Viewing**: Zoom and pan functionality for detailed image inspection
+- **Window Management**: Pin/unpin the gallery window, move and resize it, with click-through support when unpinned
+- **Theme Support**: Dark and light themes with automatic text color adaptation
 
 ---
 
@@ -40,7 +43,39 @@ The main gallery view displays all images from your ComfyUI output directory in 
 4. Adjust the rating filter slider to show only highly-rated images
 5. Click any image thumbnail to view it in detail
 
-### 2. Detailed Image View
+### 2. File Explorer
+
+A full-featured file explorer that lets you navigate and manage your output directory with multiple view modes inspired by Windows File Explorer.
+
+**Features:**
+- **Multiple View Modes**:
+  - **Details View**: List view with file names, sizes, and metadata
+  - **Small Icons**: Compact icon view with thumbnails
+  - **Medium Icons**: Medium-sized icon view with thumbnails
+  - **Large Icons**: Large icon view with thumbnails
+  - **Tiles View**: Tile view with thumbnails and file information
+- **Breadcrumb Navigation**: Navigate through folder hierarchy with clickable breadcrumbs
+- **Image Thumbnails**: Automatic thumbnail generation for image files in icon/tile views
+- **Folder Management**: Create, rename, and delete folders
+- **File Operations**: Rename and delete files directly from the explorer
+- **Drag and Drop**: Move files and folders by dragging them to new locations
+- **Theme-Aware**: Text colors automatically adapt to light/dark themes
+
+**How to Use:**
+1. Click the folder/viewer button in the gallery header to switch to explorer mode
+2. Use the view mode buttons (☰ Details, ⊞ Icons, ⊟ Tiles) to change the display style
+3. Double-click folders to navigate into them
+4. Double-click image files to open them in the detailed view
+5. Use breadcrumbs to navigate back to parent folders
+6. Drag files or folders to move them to different locations
+7. Hover over items to reveal action buttons (rename, delete)
+
+**View Mode Details:**
+- **Details View**: Traditional list view showing file names, sizes, and icons in a single column
+- **Icon Views**: Grid layout with image thumbnails (or emoji icons for non-images) and file names below
+- **Tiles View**: Larger grid items with thumbnails, file names, and file sizes
+
+### 3. Detailed Image View
 
 The detailed view provides a full-screen experience for viewing and managing individual images.
 
@@ -50,16 +85,60 @@ The detailed view provides a full-screen experience for viewing and managing ind
 - Keyboard navigation (Arrow keys, Escape)
 - Zoom and drag mode for detailed inspection
 - Quick action buttons (metadata, open in new tab, zoom, close)
+- Folder-aware navigation when opened from explorer
 
 **How to Use:**
-1. Click an image in the grid to open the detailed view
+1. Click an image in the grid or explorer to open the detailed view
 2. Use arrow keys or click side thumbnails to navigate between images
 3. Click the "+" button to enable zoom mode, then:
-   - Use mouse wheel to zoom in/out
+   - Use mouse wheel to zoom in/out (zooms toward cursor position)
    - Click and drag to pan when zoomed in
 4. Press Escape or click the "✖" button to close
 
-### 3. Metadata Panel
+### 4. Window Management (Pin/Unpin)
+
+Control the gallery window's position and behavior with pin/unpin functionality.
+
+**Features:**
+- **Pin/Unpin Button**: Toggle between pinned and unpinned states
+- **Pinned Mode**: Window is centered with a backdrop shadow, cannot be moved
+- **Unpinned Mode**: 
+  - Window can be dragged by the header
+  - Window can be resized using the corner resize handle
+  - Backdrop shadow is removed
+  - Clicks pass through to the underlying ComfyUI workflow (click-through)
+  - Window position and size are saved and restored
+- **Click-Through**: When unpinned, interact with ComfyUI workflow while gallery is open
+
+**How to Use:**
+1. Click the pin button (📌) in the gallery header
+2. When unpinned (📍), drag the header to move the window
+3. Drag the bottom-right corner to resize the window
+4. Click the pin button again to pin the window back to center
+5. When unpinned, you can interact with the ComfyUI workflow behind the gallery
+
+**Benefits:**
+- Monitor images being generated in real-time while working on workflows
+- Manage your photo directory without interrupting your workflow
+- Position the gallery window anywhere on your screen for optimal workflow
+
+### 5. Moveable Settings and Filter Windows
+
+Settings and filter panels can be moved around the screen for better workflow management.
+
+**Features:**
+- Drag the header to move the settings window
+- Drag the header to move the filter panel
+- Windows stay within viewport bounds
+- Shared color scheme between settings and filter windows
+- Theme-aware styling
+
+**How to Use:**
+1. Open the settings or filter panel
+2. Click and drag the header to move the window
+3. Position it where it's most convenient for your workflow
+
+### 6. Metadata Panel
 
 The metadata panel displays comprehensive information about each image and allows editing for authorized users.
 
@@ -78,7 +157,7 @@ The metadata panel displays comprehensive information about each image and allow
 4. For admins: Click the pencil icon next to editable fields to modify them
 5. Press Enter to save changes, Escape to cancel
 
-### 4. Rating System
+### 7. Rating System
 
 Rate images with a 1-5 star system that persists across sessions.
 
@@ -95,7 +174,7 @@ Rate images with a 1-5 star system that persists across sessions.
 3. Use the rating filter slider to show only images above a certain rating
 4. Ratings are visible in both the grid overlay and metadata panel
 
-### 5. Tagging System
+### 8. Tagging System
 
 Add and manage tags for organizing your images.
 
@@ -112,7 +191,7 @@ Add and manage tags for organizing your images.
 4. Press Enter to save
 5. Tags will appear as colored pills below the field
 
-### 6. NSFW Content Filtering
+### 9. NSFW Content Filtering
 
 Automatic content filtering based on user permissions and NSFW detection.
 
@@ -137,27 +216,36 @@ Automatic content filtering based on user permissions and NSFW detection.
 - NSFW API must be available and properly configured
 - User permissions must be set up in ComfyUI-Usgromana
 
-### 7. File Management
+### 10. File Management
 
-Rename and delete images directly from the gallery interface.
+Comprehensive file and folder management directly from the gallery interface.
 
-**Rename Files (Admin only):**
-1. Open the metadata panel for an image
-2. Click the pencil icon next to "File"
-3. Enter the new filename (without extension)
-4. Press Enter to save
-5. The file will be renamed and metadata updated automatically
+**File Operations:**
+- **Rename Files** (Admin only):
+  1. In explorer view, hover over a file and click the rename button (✏️)
+  2. Or open metadata panel and click the pencil icon next to "File"
+  3. Enter the new filename (without extension)
+  4. Press Enter to save
 
-**Delete Files (Admin only):**
-1. Open the metadata panel for an image
-2. Scroll to the bottom of the metadata panel
-3. Click the "🗑️ Delete Image" button
-4. Confirm the deletion
-5. The image will be permanently deleted from the server
+- **Delete Files** (Admin only):
+  1. In explorer view, hover over a file and click the delete button (🗑️)
+  2. Or open metadata panel and scroll to bottom and click "🗑️ Delete Image"
+  3. Confirm the deletion
 
-**Note**: Both rename and delete operations are only available to administrators.
+- **Move Files/Folders**:
+  1. In explorer view, drag a file or folder
+  2. Drop it onto a folder or the file list area
+  3. The item will be moved to the new location
 
-### 8. Zoom and Drag Mode
+**Folder Operations:**
+- **Create Folder**: Click "+ New Folder" button in explorer toolbar
+- **Rename Folder**: Hover over folder and click rename button (✏️)
+- **Delete Folder**: Hover over folder and click delete button (🗑️)
+- **Move Folder**: Drag and drop folder to new location
+
+**Note**: File rename and delete operations are only available to administrators.
+
+### 11. Zoom and Drag Mode
 
 Inspect images in detail with zoom and pan functionality.
 
@@ -175,7 +263,7 @@ Inspect images in detail with zoom and pan functionality.
 4. When zoomed in, click and drag to pan around the image
 5. Click "+" again to disable zoom mode
 
-### 9. Batch Operations
+### 12. Batch Operations
 
 Perform operations on multiple images at once.
 
@@ -190,12 +278,12 @@ Perform operations on multiple images at once.
 3. Confirm the deletion
 4. All selected images will be permanently deleted
 
-### 10. Settings and Configuration
+### 13. Settings and Configuration
 
 Customize the gallery behavior through the settings panel.
 
 **Available Settings:**
-- **Theme**: Dark or light mode
+- **Theme**: Dark or light mode (with automatic text color adaptation)
 - **Thumbnail Size**: Small, medium, or large
 - **Show Rating in Grid**: Toggle star rating overlay on grid images
 - **Enable Drag**: Allow dragging images from the grid
@@ -210,7 +298,7 @@ Customize the gallery behavior through the settings panel.
 3. Adjust settings as desired
 4. Settings are saved automatically
 
-### 11. Real-time File Monitoring
+### 14. Real-time File Monitoring
 
 Automatically detect and display new images as they are generated.
 
@@ -242,6 +330,7 @@ Several features require administrator privileges - ComfyUI-Usgromana extension 
 - Rename image files
 - Delete images (single or batch)
 - Mark images as NSFW manually
+- Create, rename, and delete folders
 
 **How to Become Admin:**
 - Your user account must have `is_admin: true` in ComfyUI-Usgromana user configuration
@@ -295,6 +384,22 @@ Metadata is stored in multiple locations for reliability:
 - Compatible with other image management tools
 - Redundant storage ensures data safety
 
+### Theme System
+
+The gallery supports dark and light themes with automatic text color adaptation.
+
+**Features:**
+- **Dark Theme**: Dark backgrounds with light text
+- **Light Theme**: Light backgrounds with dark text
+- **Automatic Text Colors**: Text colors automatically adapt based on theme
+- **Theme Persistence**: Theme preference is saved and restored
+- **Consistent Styling**: All UI elements (explorer, settings, filter panels) share theme colors
+
+**How to Change Theme:**
+1. Open the settings panel
+2. Select "Dark" or "Light" from the Theme dropdown
+3. Theme is applied immediately and saved automatically
+
 ---
 
 ## Troubleshooting
@@ -320,6 +425,28 @@ Metadata is stored in multiple locations for reliability:
 3. Check browser console for API errors
 4. Verify the output directory path is correct
 5. Try refreshing the gallery (close and reopen)
+
+### File Explorer Not Working
+
+**Symptoms**: Explorer view doesn't load or shows errors.
+
+**Solutions:**
+1. Check browser console for JavaScript errors
+2. Verify you have proper file system permissions
+3. Try switching back to grid view and then to explorer again
+4. Check that the backend API is responding (check Network tab in browser dev tools)
+5. Restart ComfyUI server
+
+### Window Pin/Unpin Issues
+
+**Symptoms**: Window can't be moved or resized when unpinned.
+
+**Solutions:**
+1. Ensure you've clicked the pin button to unpin the window (should show 📍 icon)
+2. Try dragging from the header area (not buttons)
+3. Check browser console for JavaScript errors
+4. Try pinning and unpinning again
+5. Clear browser cache and reload
 
 ### NSFW Filtering Not Working
 
@@ -460,6 +587,10 @@ ComfyUI-Usgromana-Gallery/
 
 **Note**: Data files are stored separately from image files to keep the output directory clean. Metadata is also embedded in image files for portability.
 
+**Window State Storage:**
+- Window position, size, and pin state are stored in browser localStorage
+- State persists across sessions when window is unpinned
+
 ---
 
 ## Keyboard Shortcuts
@@ -491,4 +622,3 @@ For issues, feature requests, or contributions, please refer to the project repo
 ## License
 
 [Add your license information here]
-
