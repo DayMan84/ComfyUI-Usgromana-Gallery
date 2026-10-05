@@ -65,9 +65,6 @@ const debouncedRender = debounce(() => {
 
 const USE_MASONRY_LAYOUT = false;
 
-// ---------------------------------------------------------------------
-// Comfy shortcut guard
-// ---------------------------------------------------------------------
 window.__USG_GALLERY_CAPTURE__ = window.__USG_GALLERY_CAPTURE__ || false;
 
 let comfyGuardInstalled = false;
@@ -75,139 +72,32 @@ let origQueuePrompt = null;
 let origQueuePromptAll = null;
 let origClearGraph = null;
 
-// ---------------------------------------------------------------------
-// CSS injection (PERFORMANCE OPTIMIZED)
-// ---------------------------------------------------------------------
-
 function ensureGalleryGridStyles() {
     if (document.getElementById("usg-gallery-grid-style")) return;
-
     const style = document.createElement("style");
     style.id = "usg-gallery-grid-style";
     style.textContent = `
-        .usg-gallery-grid img {
-            border-radius: inherit;
-            display: block;
-        }
-        /* CRITICAL PERF FIX: Prevents layout calc for off-screen cards */
-        .usg-gallery-card {
-            content-visibility: auto; 
-            contain-intrinsic-size: 160px 200px; 
-            contain: layout paint;
-            transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
-        }
-        /* Optimize large images in grid */
-        .usg-gallery-card img {
-            image-rendering: -webkit-optimize-contrast;
-            image-rendering: crisp-edges;
-            backface-visibility: hidden;
-            transform: translateZ(0); /* Force GPU acceleration */
-        }
-        .usg-gallery-card:hover {
-            transform: translateY(-2px) scale(1.01);
-            box-shadow: 0 6px 20px var(--usg-card-hover-shadow);
-            z-index: 5;
-        }
-        .usg-gallery-scroll::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        .usg-gallery-scroll::-webkit-scrollbar-track {
-            background: var(--usg-scrollbar-track);
-            border-radius: 999px;
-        }
-        .usg-gallery-scroll::-webkit-scrollbar-thumb {
-            background: var(--usg-scrollbar-thumb);
-            border-radius: 999px;
-        }
-        .usg-gallery-divider {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 6px 4px 2px;
-            margin-top: 8px;
-            margin-bottom: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: var(--usg-divider-color);
-            border-bottom: 1px solid var(--usg-divider-border);
-        }
+        .usg-gallery-grid img { border-radius: inherit; display: block; }
     `;
     document.head.appendChild(style);
 }
 
-/**
- * Apply theme colors to grid UI elements
- */
-function applyThemeToGrid(theme) {
-    if (!rootEl) return;
-    
-    // Update CSS variables on root element
-    const root = rootEl.closest('.usg-gallery-panel') || document.documentElement;
-    root.style.setProperty('--usg-scrollbar-track', theme.scrollbarTrack);
-    root.style.setProperty('--usg-scrollbar-thumb', theme.scrollbarThumb);
-    root.style.setProperty('--usg-divider-color', theme.dividerColor);
-    root.style.setProperty('--usg-divider-border', theme.dividerBorder);
-    root.style.setProperty('--usg-card-hover-shadow', theme.cardHoverShadow);
-    
-    // Update filter bar colors
-    const filterBar = rootEl.querySelector('div[style*="display: flex"]');
-    if (filterBar) {
-        filterBar.style.color = theme.textTertiary;
-    }
-    
-    // Update search input
-    const searchInput = rootEl.querySelector('input[type="text"]');
-    if (searchInput) {
-        searchInput.style.border = `1px solid ${theme.inputBorder}`;
-        searchInput.style.background = theme.inputBackground;
-        searchInput.style.color = theme.inputText;
-    }
-    
-    // Update buttons
-    const buttons = rootEl.querySelectorAll('button');
-    buttons.forEach(btn => {
-        if (btn.id && btn.id.startsWith('usg-filter-btn-')) {
-            // Rating filter buttons
-            const isActive = btn.style.background.includes('180,180,255') || 
-                           btn.style.background.includes('rgba(180,180,255');
-            btn.style.border = `1px solid ${theme.cardBorder}`;
-            btn.style.background = isActive ? theme.buttonActiveBackground : theme.cardBackground;
-            btn.style.color = theme.textPrimary;
-        } else if (btn.textContent === 'Refresh' || btn.textContent.includes('Download Selected') || btn.textContent.includes('Delete Selected')) {
-            // Action buttons
-            if (btn.textContent.includes('Delete')) {
-                btn.style.border = `1px solid ${theme.dangerBorder}`;
-                btn.style.background = theme.dangerBackground;
-                btn.style.color = theme.dangerText;
-            } else {
-                btn.style.border = `1px solid ${theme.buttonBorder}`;
-                btn.style.background = theme.buttonBackground;
-                btn.style.color = theme.buttonText;
-            }
-        } else if (btn.textContent === 'Filters') {
-            // Filter toggle button
-            btn.style.border = `1px solid ${theme.buttonBorder}`;
-            btn.style.background = theme.cardBackground;
-            btn.style.color = theme.textPrimary;
-        }
-    });
-    
-    // Update loading indicator
-    const loadingIndicator = rootEl.querySelector('.usg-loading-indicator');
-    if (loadingIndicator) {
-        loadingIndicator.style.background = theme.filterBackground;
-        loadingIndicator.style.border = `1px solid ${theme.filterBorder}`;
-    }
-    
-    const statusEl = rootEl.querySelector('.usg-loading-status');
-    if (statusEl) {
-        statusEl.style.color = theme.textPrimary;
-    }
-    
-    const imageNameEl = rootEl.querySelector('.usg-loading-image-name');
-    if (imageNameEl) {
-        imageNameEl.style.color = theme.textSecondary;
-    }
+export function clearGridThumbnails() {
+    if (!gridContentEl) return;
+    gridContentEl.innerHTML = "";
+}
+
+export async function reloadImagesAndRender() {
+    clearGridThumbnails();
+}
+
+export function initGrid(root) {
+    rootEl = root;
+    ensureGalleryGridStyles();
+}
+
+function createCard(img, index) {
+    const card = document.createElement("div");
+    bindImageContextMenu(card, img);
+    return card;
 }
