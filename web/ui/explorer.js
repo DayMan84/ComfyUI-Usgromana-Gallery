@@ -95,11 +95,11 @@ function buildExplorerUI() {
     viewModeContainer.appendChild(viewModeLabel);
 
     const viewModes = [
-        { id: "details", label: "Details", icon: "\u2630" },
-        { id: "smallIcons", label: "Small Icons", icon: "\u229e" },
-        { id: "mediumIcons", label: "Medium Icons", icon: "\u229e" },
-        { id: "largeIcons", label: "Large Icons", icon: "\u229e" },
-        { id: "tiles", label: "Tiles", icon: "\u229f" },
+        { id: "details", label: "Details", icon: "☰" },
+        { id: "smallIcons", label: "Small Icons", icon: "⊞" },
+        { id: "mediumIcons", label: "Medium Icons", icon: "⊞" },
+        { id: "largeIcons", label: "Large Icons", icon: "⊞" },
+        { id: "tiles", label: "Tiles", icon: "⊟" },
     ];
 
     viewModes.forEach((mode) => {
@@ -217,7 +217,7 @@ function updateBreadcrumb() {
     // Root/home button
     const homeBtn = document.createElement("button");
     homeBtn.type = "button"; // Prevent form submission if inside a form
-    homeBtn.textContent = "\ud83c\udfe0 Root";
+    homeBtn.textContent = "🏠 Root";
     Object.assign(homeBtn.style, {
         borderRadius: "6px",
         border: `1px solid ${theme.buttonBorder}`,
@@ -400,7 +400,7 @@ function createFolderItem(folder) {
     });
 
     const icon = document.createElement("span");
-    icon.textContent = "\ud83d\udcc1";
+    icon.textContent = "📁";
     if (currentViewMode === "details") {
         icon.style.fontSize = "16px";
     } else {
@@ -462,11 +462,11 @@ function createFolderItem(folder) {
         transition: "opacity 0.2s",
     });
 
-    const renameBtn = createActionButton("\u270f\ufe0f", "Rename", (e) => {
+    const renameBtn = createActionButton("✏️", "Rename", (e) => {
         e.stopPropagation();
         renameFolder(folder.path || folder.name, folder.name || folder.path);
     });
-    const deleteBtn = createActionButton("\ud83d\uddd1\ufe0f", "Delete", (e) => {
+    const deleteBtn = createActionButton("🗑️", "Delete", (e) => {
         e.stopPropagation();
         deleteFolder(folder.path || folder.name, folder.name || folder.path);
     });
@@ -556,7 +556,7 @@ function createFileItem(file) {
     
     // Check if file is an image
     const fileName = file.name || file.filename || "";
-    const isImage = /\\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(fileName);
+    const isImage = /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(fileName);
     const filePath = file.path || file.filename;
     
     // Different styles based on view mode
@@ -619,7 +619,7 @@ function createFileItem(file) {
     if (currentViewMode === "details") {
         // Details view: use emoji icon
         iconElement = document.createElement("span");
-        iconElement.textContent = "\ud83d\uddbc\ufe0f";
+        iconElement.textContent = "🖼️";
         iconElement.style.fontSize = "16px";
     } else if (isImage && filePath) {
         // Icon/tile views: use thumbnail for images - Windows Explorer style
@@ -654,7 +654,7 @@ function createFileItem(file) {
         
         // Create fallback emoji (hidden by default)
         const fallback = document.createElement("span");
-        fallback.textContent = "\ud83d\uddbc\ufe0f";
+        fallback.textContent = "🖼️";
         fallback.style.fontSize = thumbSize;
         fallback.style.display = "none";
         fallback.style.position = "absolute";
@@ -675,7 +675,7 @@ function createFileItem(file) {
     } else {
         // Non-image file: use emoji icon - Windows Explorer style
         iconElement = document.createElement("span");
-        iconElement.textContent = "\ud83d\udcc4";
+        iconElement.textContent = "📄";
         const iconSize = currentViewMode === "smallIcons" ? "16px" : 
                         currentViewMode === "mediumIcons" ? "32px" : 
                         currentViewMode === "largeIcons" ? "48px" : "32px";
@@ -736,11 +736,11 @@ function createFileItem(file) {
         transition: "opacity 0.2s",
     });
 
-    const renameBtn = createActionButton("\u270f\ufe0f", "Rename", (e) => {
+    const renameBtn = createActionButton("✏️", "Rename", (e) => {
         e.stopPropagation();
         renameFile(file.path || file.filename, file.name || file.filename);
     });
-    const deleteBtn = createActionButton("\ud83d\uddd1\ufe0f", "Delete", (e) => {
+    const deleteBtn = createActionButton("🗑️", "Delete", (e) => {
         e.stopPropagation();
         deleteFile(file.path || file.filename, file.name || file.filename);
     });
@@ -858,7 +858,7 @@ async function createNewFolder() {
     const name = prompt("Enter folder name:");
     if (!name || !name.trim()) return;
     
-    const sanitizedName = name.trim().replace(/[<>:\"|?*\\\\/]/g, "_");
+    const sanitizedName = name.trim().replace(/[<>:"|?*\\/]/g, "_");
     if (!sanitizedName) {
         alert("Invalid folder name");
         return;
@@ -876,7 +876,7 @@ async function renameFolder(path, currentName) {
     const newName = prompt("Enter new folder name:", currentName);
     if (!newName || !newName.trim() || newName === currentName) return;
     
-    const sanitizedName = newName.trim().replace(/[<>:\"|?*\\\\/]/g, "_");
+    const sanitizedName = newName.trim().replace(/[<>:"|?*\\/]/g, "_");
     if (!sanitizedName) {
         alert("Invalid folder name");
         return;
@@ -891,7 +891,7 @@ async function renameFolder(path, currentName) {
 }
 
 async function deleteFolder(path, name) {
-    if (!confirm(`Delete folder \"${name}\" and all its contents?`)) return;
+    if (!confirm(`Delete folder "${name}" and all its contents?`)) return;
     
     try {
         await galleryApi.deleteFolder(path);
@@ -909,7 +909,7 @@ async function renameFile(path, currentName) {
     const newName = prompt("Enter new file name:", currentName);
     if (!newName || !newName.trim() || newName === currentName) return;
     
-    const sanitizedName = newName.trim().replace(/[<>:\"|?*\\\\/]/g, "_");
+    const sanitizedName = newName.trim().replace(/[<>:"|?*\\/]/g, "_");
     if (!sanitizedName) {
         alert("Invalid file name");
         return;
@@ -925,7 +925,7 @@ async function renameFile(path, currentName) {
 }
 
 async function deleteFile(path, name) {
-    if (!confirm(`Delete file \"${name}\"?`)) return;
+    if (!confirm(`Delete file "${name}"?`)) return;
     
     try {
         await galleryApi.deleteFile(path);
