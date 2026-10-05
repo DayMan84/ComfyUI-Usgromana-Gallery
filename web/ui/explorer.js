@@ -1,9 +1,11 @@
 // ComfyUI-Usgromana-Gallery/web/ui/explorer.js
 
 import { galleryApi } from "../core/api.js";
+import { importDroppedImages, isExternalFileDrag } from "../core/dragDrop.js";
 import { API_BASE, API_ENDPOINTS } from "../core/constants.js";
 import { getImages, setSelectedIndex } from "../core/state.js";
 import { showDetailsForIndex, setFolderFilter } from "./details.js";
+import { bindImageContextMenu } from "./imageMenu.js";
 import { getCurrentTheme, subscribeTheme } from "../core/themeManager.js";
 
 let rootEl = null;
@@ -177,6 +179,12 @@ function buildExplorerUI() {
     
     // Make file list a drop zone
     setupDropZone(fileListEl);
+    if (!window.__usgGalleryLibraryListener) {
+        window.__usgGalleryLibraryListener = true;
+        window.addEventListener("usg-gallery-library-changed", () => {
+            if (fileListEl) loadCurrentPath(currentPath);
+        });
+    }
     
     scrollContainer.appendChild(fileListEl);
     rootEl.appendChild(scrollContainer);
@@ -786,6 +794,13 @@ function createFileItem(file) {
         item.style.opacity = "1";
     });
 
+    if (isImage && filePath) {
+        bindImageContextMenu(item, {
+            relpath: filePath,
+            filename: fileName,
+        });
+    }
+
     // Double-click to open file in details view
     let clickTimer = null;
     item.onclick = (e) => {
@@ -934,8 +949,9 @@ async function deleteFile(path, name) {
 
 function setupDropZone(element) {
     element.addEventListener("dragover", (e) => {
+        const external = isExternalFileDrag(e);
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
+        e.dataTransfer.dropEffect = external ? "copy" : "move";
         element.style.background = "rgba(56,189,248,0.1)";
     });
     
@@ -944,11 +960,14 @@ function setupDropZone(element) {
     });
     
     element.addEventListener("drop", async (e) => {
-        e.preventDefault();
         element.style.background = "";
+        if (await importDroppedImages(e, () => currentPath)) return;
+        e.preventDefault();
         
         try {
-            const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+            const raw = e.dataTransfer.getData("text/plain");
+            if (!raw) return;
+            const data = JSON.parse(raw);
             if (data.type === "file") {
                 // Move file to current directory
                 await galleryApi.moveFile(data.path, currentPath);
@@ -967,9 +986,10 @@ function setupDropZone(element) {
 
 function setupDropTarget(element, targetPath) {
     element.addEventListener("dragover", (e) => {
+        const external = isExternalFileDrag(e);
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
+        e.dataTransfer.dropEffect = external ? "copy" : "move";
         element.style.background = "rgba(56,189,248,0.2)";
         element.style.borderColor = "rgba(56,189,248,0.6)";
     });
@@ -980,13 +1000,16 @@ function setupDropTarget(element, targetPath) {
     });
     
     element.addEventListener("drop", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
         element.style.background = "";
         element.style.borderColor = "";
+        if (await importDroppedImages(e, targetPath)) return;
+        e.preventDefault();
+        e.stopPropagation();
         
         try {
-            const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+            const raw = e.dataTransfer.getData("text/plain");
+            if (!raw) return;
+            const data = JSON.parse(raw);
             if (data.type === "file") {
                 // Move file to target folder
                 await galleryApi.moveFile(data.path, targetPath);

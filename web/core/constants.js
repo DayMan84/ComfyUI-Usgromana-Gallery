@@ -22,6 +22,7 @@ export const API_ENDPOINTS = {
     LOG: `${API_BASE}/log`,
     SETTINGS: `${API_BASE}/settings`,
     WATCH: `${API_BASE}/watch`,
+    UPLOAD: `${API_BASE}/upload`,
 };
 
 // Image file extensions

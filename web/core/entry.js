@@ -455,11 +455,40 @@ function createFloatingButton() {
 }
 
 // ---------------------------------------------------------
+// Usgromana radial menu
+// The wheel belongs to Usgromana. Register only when that API exists.
+// ---------------------------------------------------------
+function registerUsgromanaRadialButton() {
+    const api = window.UsgromanaRadialMenu;
+    if (!api || typeof api.register !== "function") return false;
+    if (typeof api.getAll === "function" && api.getAll().some((button) => button.id === "gallery")) {
+        return true;
+    }
+    return api.register({
+        id: "gallery",
+        label: "Gallery",
+        icon: "🖼️",
+        order: 10,
+        onClick: () => showOverlay(),
+    }) !== false;
+}
+
+function watchUsgromanaRadialButton() {
+    if (registerUsgromanaRadialButton()) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+        tries += 1;
+        if (registerUsgromanaRadialButton() || tries >= 40) clearInterval(timer);
+    }, 250);
+}
+
+// ---------------------------------------------------------
 // Public init
 // ---------------------------------------------------------
 export async function initGalleryExtension() {
     if (initialized) return;
     initialized = true;
+    watchUsgromanaRadialButton();
 
     // Initialize theme system first
     initThemeSystem();
