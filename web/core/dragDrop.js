@@ -470,57 +470,102 @@ export function isExternalFileDrag(event) {
     return !types.every((type) => type === "text/plain" || type === "application/json");
 }
 
-function imageFilesFromDrop(event) {
-    return [...(event.dataTransfer?.files || [])].filter((file) => {
-        const name = (file.name || "").toLowerCase();
-        return IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext));
-    });
+function filesFromDrop(event) {
+    const transfer = event.dataTransfer;
+    const direct = [...(transfer?.files || [])];
+    if (direct.length) return direct;
+    const items = transfer?.items;
+    if (!items) return [];
+    const collected = [];
+    for (const item of items) {
+        if (item.kind !== "file") continue;
+        const file = item.getAsFile?.();
+        if (file) collected.push(file);
+    }
+    return collected;
 }
 
-function libraryStatus(target, message) {
-    const panel = target?.closest?.(".usg-gallery-panel") || document.querySelector(".usg-gallery-panel");
-    if (!panel) return;
-    let note = panel.querySelector(".usg-gallery-drop-status");
+let highlightedLibraryPanel = null;
+
+function libraryStatus(message) {
+    let note = document.querySelector(".usg-gallery-drop-status");
     if (!note) {
         note = document.createElement("div");
         note.className = "usg-gallery-drop-status";
         Object.assign(note.style, {
-            position: "absolute",
+            position: "fixed",
             left: "50%",
-            bottom: "18px",
+            bottom: "28px",
             transform: "translateX(-50%)",
             padding: "8px 14px",
             borderRadius: "999px",
-            background: "rgba(15, 23, 42, 0.92)",
+            background: "rgba(15, 23, 42, 0.94)",
             color: "#e5e7eb",
+            border: "1px solid rgba(148,163,184,0.45)",
             fontSize: "13px",
-            zIndex: "5",
+            zIndex: "10050",
             pointerEvents: "none",
+            maxWidth: "80vw",
         });
-        panel.appendChild(note);
+        document.body.appendChild(note);
     }
     note.textContent = message;
     clearTimeout(note._hideTimer);
     note._hideTimer = setTimeout(() => note.remove(), 8000);
 }
 
+function clearLibraryHighlight() {
+    const panels = highlightedLibraryPanel ? [highlightedLibraryPanel] : [];
+    document.querySelectorAll(".usg-gallery-panel").forEach((panel) => panels.push(panel));
+    panels.forEach((panel) => {
+        if (!panel || !panel.style) return;
+        panel.style.outline = "";
+        panel.style.outlineOffset = "";
+    });
+    highlightedLibraryPanel = null;
+}
+
 function highlightLibraryTarget(element, active) {
-    if (!element) return;
-    element.style.outline = active ? "2px dashed rgba(56,189,248,0.85)" : "";
-    element.style.outlineOffset = active ? "-8px" : "";
+    if (!active || !element || !element.style) {
+        clearLibraryHighlight();
+        return;
+    }
+    if (highlightedLibraryPanel && highlightedLibraryPanel !== element) {
+        highlightedLibraryPanel.style.outline = "";
+        highlightedLibraryPanel.style.outlineOffset = "";
+    }
+    highlightedLibraryPanel = element;
+    element.style.outline = "2px dashed rgba(56,189,248,0.85)";
+    element.style.outlineOffset = "-8px";
+}
+
+function watchGalleryCloseForDropReset() {
+    const overlay = document.querySelector(".usg-gallery-overlay");
+    if (!overlay || overlay.dataset.usgDropReset === "1") return;
+    overlay.dataset.usgDropReset = "1";
+    new MutationObserver(() => {
+        if (overlay.style.display === "none") clearLibraryHighlight();
+    }).observe(overlay, { attributes: true, attributeFilter: ["style"] });
 }
 
 export async function importDroppedImages(event, folder = "") {
     if (!dragEnabled || !isExternalFileDrag(event)) return false;
-    const images = imageFilesFromDrop(event);
-    const dropped = event.dataTransfer?.files?.length || 0;
+    const droppedFiles = filesFromDrop(event);
+    const images = droppedFiles.filter((file) => {
+        const name = (file.name || "").toLowerCase();
+        return IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext));
+    });
+    const dropped = droppedFiles.length;
     event.preventDefault();
     event.stopPropagation();
-    highlightLibraryTarget(event.currentTarget, false);
+    clearLibraryHighlight();
     if (!images.length) {
-        libraryStatus(event.currentTarget, "Drop PNG, JPG, WEBP, GIF, or BMP images.");
+        libraryStatus(dropped
+            ? "Drop PNG, JPG, WEBP, GIF, or BMP images."
+            : "The image was not received. Drop a PNG, JPG, WEBP, GIF, or BMP file onto the gallery.");
         return true;
     }
+    libraryStatus(images.length === 1 ? "Uploading image…" : `Uploading ${images.length} images…`);
     try {
         const destination = typeof folder === "function" ? folder() || "" : folder || "";
         const result = await galleryApi.uploadImages(images, destination);
@@ -531,12 +576,9 @@ export async function importDroppedImages(event, folder = "") {
         const count = (result.images || []).length;
         const skipped = dropped - images.length;
         const extra = skipped ? ` ${skipped} file${skipped === 1 ? "" : "s"} skipped.` : "";
-        libraryStatus(
-            event.currentTarget,
-            `Added ${count} image${count === 1 ? "" : "s"} to your library.${extra}`
-        );
+        libraryStatus(`Added ${count} image${count === 1 ? "" : "s"} to your library.${extra}`);
     } catch (err) {
-        libraryStatus(event.currentTarget, err.message || "Could not add images");
+        libraryStatus(err.message || "Could not add images");
     }
     return true;
 }
@@ -558,10 +600,15 @@ export function attachLibraryDrop(element, getFolder = () => "") {
         highlightLibraryTarget(element, true);
     });
     element.addEventListener("dragleave", (event) => {
-        if (event.target === element) highlightLibraryTarget(element, false);
+        const related = event.relatedTarget;
+        if (related instanceof Node && element.contains(related)) return;
+        highlightLibraryTarget(element, false);
     });
     element.addEventListener("drop", (event) => {
-        importDroppedImages(event, getFolder);
+        importDroppedImages(event, getFolder).catch((err) => {
+            clearLibraryHighlight();
+            libraryStatus(err.message || "Could not add images");
+        });
     });
 }
 
@@ -577,24 +624,43 @@ function galleryPanelFromEvent(event) {
 function setupLibraryImportDrop() {
     const panel = document.querySelector(".usg-gallery-panel");
     if (panel) attachLibraryDrop(panel);
+    watchGalleryCloseForDropReset();
 
     // Capture drags that enter the browser from the desktop before a child handles them.
     document.addEventListener("dragenter", (event) => {
         const targetPanel = galleryPanelFromEvent(event);
         if (!targetPanel || !dragEnabled || !isExternalFileDrag(event)) return;
         event.preventDefault();
+        watchGalleryCloseForDropReset();
     }, true);
     document.addEventListener("dragover", (event) => {
         const targetPanel = galleryPanelFromEvent(event);
         if (!targetPanel || !dragEnabled || !isExternalFileDrag(event)) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
         highlightLibraryTarget(targetPanel, true);
+    }, true);
+    document.addEventListener("dragleave", (event) => {
+        const related = event.relatedTarget;
+        // A null relatedTarget is common while moving across children. dragend and drop reset the frame.
+        if (!(related instanceof Node)) return;
+        const panel = document.querySelector(".usg-gallery-panel");
+        const overlay = document.querySelector(".usg-gallery-overlay");
+        if (!panel) return;
+        if (panel.contains(related) || overlay?.contains(related)) return;
+        clearLibraryHighlight();
+    }, true);
+    document.addEventListener("dragend", () => {
+        clearLibraryHighlight();
     }, true);
     document.addEventListener("drop", (event) => {
         const targetPanel = galleryPanelFromEvent(event);
+        clearLibraryHighlight();
         if (!targetPanel || !dragEnabled || !isExternalFileDrag(event)) return;
-        importDroppedImages(event);
+        importDroppedImages(event).catch((err) => {
+            clearLibraryHighlight();
+            libraryStatus(err.message || "Could not add images");
+        });
     }, true);
 }
 
