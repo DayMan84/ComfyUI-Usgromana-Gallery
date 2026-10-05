@@ -1,8 +1,8 @@
 """Gallery share routes and per-account scoping.
 
-These endpoints and the Share buttons live in the gallery package. They do
-nothing unless ComfyUI-Usgromana is installed beside it, so a standalone
-gallery keeps its original output folder and has no share controls.
+Share controls live on the gallery image right-click menu. They do nothing
+unless ComfyUI-Usgromana is installed beside it, so a standalone gallery
+keeps its original output folder and has no share controls.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .account_scope import use_account_root
-from .shares import ImageShareStore, parse_shared_relpath
+from .shares import ImageShareStore, normalize_relpath, parse_shared_relpath
 from . import usgromana_accounts as accounts
 
 ROUTE_PREFIX = "/usgromana-gallery"
@@ -99,7 +99,11 @@ async def share_accounts(request: web.Request) -> web.Response:
     if isinstance(caller, web.Response):
         return caller
     _user_id, username = caller
-    others = sorted(name for name in accounts.known_usernames() if name != username)
+    others = sorted(
+        name
+        for name in accounts.known_usernames()
+        if name != username and name.lower() != "guest"
+    )
     return web.json_response({"ok": True, "users": others})
 
 
@@ -309,6 +313,67 @@ async def gallery_account_middleware(request: web.Request, handler):
     ):
         return _append_shared(response, user_id, username)
     return response
+
+
+def _own_image_file(relpath: str) -> str | None:
+    from .files import get_output_dir
+
+    normalized = normalize_relpath(relpath)
+    if not normalized:
+        return None
+    root = os.path.realpath(get_output_dir())
+    joined = os.path.realpath(os.path.join(root, *normalized.split("/")))
+    if joined != root and not joined.startswith(root + os.sep):
+        return None
+    if not os.path.isfile(joined):
+        return None
+    return joined
+
+
+def _workflow_file(filename: str, user_id: str | None, username: str | None):
+    parsed = parse_shared_relpath(filename)
+    if parsed is not None:
+        if not accounts.installed():
+            return _json_error("File not found", 404)
+        owner_id, relpath = parsed
+        store = get_share_store()
+        if not store.can_view(user_id, username, owner_id, relpath):
+            return _json_error("Access denied", 403)
+        file_path = store.resolve_owned_file(owner_id, relpath)
+        if not file_path:
+            return _json_error("File not found", 404)
+        return file_path
+    file_path = _own_image_file(filename)
+    if not file_path:
+        return _json_error("File not found", 404)
+    return file_path
+
+
+@PromptServer.instance.routes.get(f"{ROUTE_PREFIX}/shares/workflow")
+async def image_workflow(request: web.Request) -> web.Response:
+    """Return the workflow embedded in an image the caller can already see."""
+    filename = request.rel_url.query.get("filename") or ""
+    user_id, username = (None, None)
+    if accounts.installed():
+        user_id, username = accounts.caller_from_request(request)
+    resolved = _workflow_file(filename, user_id, username)
+    if isinstance(resolved, web.Response):
+        return resolved
+    if _nsfw_blocked(resolved, username):
+        return _json_error("Access denied: NSFW content blocked", 403)
+    try:
+        from .metadata_extractor import extract_image_metadata
+
+        extracted = extract_image_metadata(resolved)
+    except Exception as exc:
+        return _json_error(f"Could not read the image workflow: {exc}", 400)
+    workflow = extracted.get("workflow") or None
+    prompt = extracted.get("prompt") or None
+    if workflow == {}:
+        workflow = None
+    if prompt == {}:
+        prompt = None
+    return web.json_response({"ok": True, "workflow": workflow, "prompt": prompt})
 
 
 def register() -> None:
