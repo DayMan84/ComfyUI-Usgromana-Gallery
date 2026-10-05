@@ -164,4 +164,27 @@ export const galleryApi = {
             body: JSON.stringify({ folderPath, targetFolderPath }),
         });
     },
+
+    async uploadImages(files, folder = "") {
+        const body = new FormData();
+        body.append("folder", folder || "");
+        for (const file of files) {
+            body.append("files", file, file.name);
+        }
+        const res = await fetch(`${API_BASE}/upload`, {
+            method: "POST",
+            credentials: "same-origin",
+            body,
+        });
+        let data = {};
+        try {
+            data = await res.json();
+        } catch (err) {
+            data = {};
+        }
+        if (!res.ok || data.ok === false) {
+            throw new Error(data.error || `Upload failed: ${res.status}`);
+        }
+        return data;
+    },
 };
