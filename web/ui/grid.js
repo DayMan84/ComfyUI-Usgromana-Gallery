@@ -1012,7 +1012,7 @@ function renderGridContent() {
 
     if (!flatList.length) {
         const empty = document.createElement("div");
-        empty.textContent = "No images found.";
+        empty.textContent = "No images found. Drop images here to add them to your library.";
         Object.assign(empty.style, {
             color: "#aaa", fontSize: "14px", textAlign: "center", marginTop: "40px", width: "100%",
         });
