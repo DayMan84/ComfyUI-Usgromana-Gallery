@@ -33,8 +33,17 @@ class GalleryImage:
 
 def get_output_dir() -> str:
     """
-    Return ComfyUI's default output directory.
+    Return the directory the gallery should scan for this call.
+
+    With ComfyUI-Usgromana installed, share handling sets this to the signed-in
+    account's output folder for the current request. On its own, the gallery
+    uses ComfyUI's output directory.
     """
+    from .account_scope import peek_account_root
+
+    override = peek_account_root()
+    if override:
+        return override
     return folder_paths.get_output_directory()
 
 
@@ -42,9 +51,8 @@ def get_gallery_root_dir() -> str:
     """
     Return the root gallery directory.
 
-    Usgromana scopes folder_paths to the logged-in user's output folder while
-    gallery routes run. A custom rootGalleryFolder is used only when it sits
-    inside that scoped directory, so one account cannot list another's files.
+    A custom rootGalleryFolder is used only when it is this directory or a
+    folder inside it, so a setting cannot point the gallery at another account.
     """
     base = os.path.abspath(get_output_dir())
     try:

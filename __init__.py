@@ -27,3 +27,15 @@ def _safe_import_backend_routes():
 
 
 _safe_import_backend_routes()
+
+
+def _safe_import_account_sharing():
+    """Share routes live here and stay idle unless Usgromana is installed."""
+    try:
+        importlib.import_module(".backend.share_http", __name__)
+    except Exception as e:
+        print("[Usgromana-Gallery] ERROR: failed to import account sharing:", e)
+        traceback.print_exc()
+
+
+_safe_import_account_sharing()
