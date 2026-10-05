@@ -39,3 +39,15 @@ def _safe_import_account_sharing():
 
 
 _safe_import_account_sharing()
+
+
+def _safe_import_library_upload():
+    """Accept images dropped onto the gallery and store them in the library."""
+    try:
+        importlib.import_module(".backend.uploads", __name__)
+    except Exception as e:
+        print("[Usgromana-Gallery] ERROR: failed to import image upload:", e)
+        traceback.print_exc()
+
+
+_safe_import_library_upload()
