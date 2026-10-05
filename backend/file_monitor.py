@@ -1,6 +1,8 @@
 # ComfyUI-Usgromana-Gallery/backend/file_monitor.py
 # Real-time file monitoring using Watchdog
 
+from __future__ import annotations
+
 import os
 import threading
 from typing import Callable, Optional
@@ -13,7 +15,8 @@ try:
 except ImportError:
     WATCHDOG_AVAILABLE = False
     Observer = None
-    FileSystemEventHandler = None
+    FileSystemEvent = object
+    FileSystemEventHandler = object
 
 
 class GalleryFileHandler(FileSystemEventHandler):
@@ -117,4 +120,3 @@ class FileMonitor:
             self.use_polling = use_polling
             if was_running:
                 self.start(use_polling)
-
