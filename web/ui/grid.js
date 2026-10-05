@@ -735,6 +735,21 @@ function updateBatchButtons() {
         batchDeleteBtn.style.display = count > 0 ? "inline-block" : "none";
         batchDeleteBtn.textContent = `Delete Selected (${count})`;
     }
+    publishGallerySelection();
+}
+
+function publishGallerySelection() {
+    window.USG_GALLERY_GET_SELECTED = () => {
+        const images = getAllImagesRaw() || [];
+        return Array.from(selectedImages)
+            .map((key) => {
+                const img = images.find(
+                    (item) => item && (item.relpath === key || item.filename === key)
+                );
+                return (img && (img.relpath || img.filename)) || key;
+            })
+            .filter(Boolean);
+    };
 }
 
 function updateFilterButtons() {
@@ -1205,7 +1220,8 @@ function createCard(img, index) {
     card.className = "usg-gallery-card";
     card.dataset.index = index;
     const imageKey = getImageKey(img);
-    const isSelected = imageKey && selectedImages.has(img.filename || img.relpath);
+    const selectKey = img.relpath || img.filename;
+    const isSelected = selectKey && selectedImages.has(selectKey);
 
     Object.assign(card.style, {
         background: isSelected ? "rgba(56,189,248,0.15)" : "transparent",
@@ -1496,7 +1512,7 @@ function createCard(img, index) {
         // Ctrl/Cmd+Click for multi-select
         if (ev.ctrlKey || ev.metaKey) {
             ev.stopPropagation();
-            const key = img.filename || img.relpath;
+            const key = img.relpath || img.filename;
             if (selectedImages.has(key)) {
                 selectedImages.delete(key);
             } else {
