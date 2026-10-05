@@ -33,35 +33,48 @@ class GalleryImage:
 
 def get_output_dir() -> str:
     """
-    Return ComfyUI's default output directory.
+    Return the directory the gallery should scan for this call.
+
+    With ComfyUI-Usgromana installed, share handling sets this to the signed-in
+    account's output folder for the current request. On its own, the gallery
+    uses ComfyUI's output directory.
     """
+    from .account_scope import peek_account_root
+
+    override = peek_account_root()
+    if override:
+        return override
     return folder_paths.get_output_directory()
 
 
 def get_gallery_root_dir() -> str:
     """
     Return the root gallery directory.
-    Checks settings for custom rootGalleryFolder, otherwise uses default output directory.
+
+    A custom rootGalleryFolder is used only when it is this directory or a
+    folder inside it, so a setting cannot point the gallery at another account.
     """
-    # Try to load settings to check for custom root folder
+    base = os.path.abspath(get_output_dir())
     try:
         _EXTENSION_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         _DATA_DIR = os.path.join(_EXTENSION_DIR, "data")
         settings_file = os.path.join(_DATA_DIR, "settings.json")
-        
+
         if os.path.exists(settings_file):
             import json
             with open(settings_file, "r", encoding="utf-8") as f:
                 settings = json.load(f) or {}
                 custom_root = settings.get("rootGalleryFolder", "").strip()
                 if custom_root and os.path.isdir(custom_root):
-                    return os.path.abspath(custom_root)
+                    custom_abs = os.path.abspath(custom_root)
+                    base_key = os.path.normcase(base)
+                    custom_key = os.path.normcase(custom_abs)
+                    if custom_key == base_key or custom_key.startswith(base_key + os.sep):
+                        return custom_abs
     except Exception:
-        # If anything fails, fall back to default
         pass
-    
-    # Default: use ComfyUI output directory
-    return get_output_dir()
+
+    return base
 
 
 def _is_image_file(name: str, extensions: set[str] | None = None) -> bool:
