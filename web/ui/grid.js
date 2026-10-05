@@ -21,6 +21,7 @@ import { galleryApi } from "../core/api.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { debounce, unloadImage } from "../core/utils.js";
 import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js"; 
+import { bindImageContextMenu } from "./imageMenu.js";
 
 let rootEl = null;
 let gridContentEl = null;
@@ -1536,6 +1537,7 @@ function createCard(img, index) {
         showDetailsForIndex(finalIndex);
     });
 
+    bindImageContextMenu(card, img);
     card.appendChild(frame);
     return card;
 }

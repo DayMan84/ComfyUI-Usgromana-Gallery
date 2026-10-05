@@ -5,6 +5,7 @@ import { importDroppedImages, isExternalFileDrag } from "../core/dragDrop.js";
 import { API_BASE, API_ENDPOINTS } from "../core/constants.js";
 import { getImages, setSelectedIndex } from "../core/state.js";
 import { showDetailsForIndex, setFolderFilter } from "./details.js";
+import { bindImageContextMenu } from "./imageMenu.js";
 import { getCurrentTheme, subscribeTheme } from "../core/themeManager.js";
 
 let rootEl = null;
@@ -792,6 +793,13 @@ function createFileItem(file) {
     item.addEventListener("dragend", () => {
         item.style.opacity = "1";
     });
+
+    if (isImage && filePath) {
+        bindImageContextMenu(item, {
+            relpath: filePath,
+            filename: fileName,
+        });
+    }
 
     // Double-click to open file in details view
     let clickTimer = null;
