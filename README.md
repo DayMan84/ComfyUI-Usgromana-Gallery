@@ -5,6 +5,9 @@
 
 A comprehensive image gallery extension for ComfyUI that provides advanced image management, metadata editing, NSFW content filtering, real-time file monitoring, and a full-featured file explorer.
 
+<p align="center">
+  <img src="./README/drag-drop.png" width="220" />
+</p>
 ## Overview
 
 ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interactive, feature-rich image gallery. It offers a modern web-based interface for browsing, organizing, rating, and managing generated images with support for user permissions, content filtering, extensive metadata management, and a Windows Explorer-style file browser.
