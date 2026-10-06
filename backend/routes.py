@@ -1,1 +1,1 @@
-OPEN /tmp/routes-exact.py
+# ComfyUI-Usgromana-Gallery/backend/routes.py
