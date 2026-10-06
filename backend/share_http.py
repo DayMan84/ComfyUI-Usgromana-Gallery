@@ -116,7 +116,11 @@ async def share_visibility(request: web.Request) -> web.Response:
     data = await _body(request)
     shares = get_share_store().visibility(user_id, _as_list(data.get("relpaths")))
     images = [
-        {"relpath": item["relpath"], "owner": username, "viewers": item["viewers"]}
+        {
+            "relpath": item["relpath"],
+            "owner": username,
+            "viewers": _effective_viewers(user_id, item["relpath"], item["viewers"]),
+        }
         for item in shares
     ]
     return web.json_response({"ok": True, "images": images})
@@ -139,8 +143,13 @@ async def share_images(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         return _json_error(str(exc))
+    _sync_sqlite_shares(user_id, username, _as_list(data.get("relpaths")))
     images = [
-        {"relpath": item["relpath"], "owner": username, "viewers": item["viewers"]}
+        {
+            "relpath": item["relpath"],
+            "owner": username,
+            "viewers": _effective_viewers(user_id, item["relpath"], item["viewers"]),
+        }
         for item in result["shares"]
     ]
     return web.json_response({"ok": True, "images": images})
@@ -161,36 +170,161 @@ async def revoke_shares(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         return _json_error(str(exc))
+    _sync_sqlite_shares(user_id, username, _as_list(data.get("relpaths")))
     images = [
-        {"relpath": item["relpath"], "owner": username, "viewers": item["viewers"]}
+        {
+            "relpath": item["relpath"],
+            "owner": username,
+            "viewers": _effective_viewers(user_id, item["relpath"], item["viewers"]),
+        }
         for item in result["shares"]
     ]
     return web.json_response({"ok": True, "images": images})
 
 
+def _migrated_image(owner_id: str, relpath: str):
+    try:
+        from .social_store import get_image_by_path, migration_done, share_migration_key
+    except Exception:
+        return None
+    row = get_image_by_path(owner_id, relpath)
+    if row and migration_done(share_migration_key(row["image_id"])):
+        return row
+    return None
+
+
+def _effective_viewers(owner_id: str, relpath: str, json_viewers: list) -> list:
+    row = _migrated_image(owner_id, relpath)
+    if row is None:
+        return json_viewers
+    from .social_store import get_shares
+
+    return [
+        item["viewer_username"]
+        for item in get_shares(row["image_id"])
+        if item.get("viewer_username")
+    ]
+
+
+def _sync_sqlite_shares(owner_id: str, username: str, relpaths: list) -> None:
+    """Copy the JSON viewer list into SQLite after a legacy share change."""
+    try:
+        from .image_identity import ensure_image_identity
+        from .social_store import mark_migration, set_shares, share_migration_key
+    except Exception as exc:
+        print(f"[Usgromana-Gallery] Legacy share migration failed: {exc}")
+        return
+    store = get_share_store()
+    known = {account["username"]: account["id"] for account in accounts.known_accounts()}
+    for relpath in relpaths:
+        normalized = normalize_relpath(relpath) if isinstance(relpath, str) else None
+        if not normalized:
+            continue
+        path = store.resolve_owned_file(owner_id, normalized)
+        if not path:
+            continue
+        try:
+            image_id = ensure_image_identity(
+                path,
+                owner_id,
+                owner_username=username,
+                storage_type="library",
+                relpath=normalized,
+                owner_root=store.owner_output_dir(owner_id),
+            )
+            names = []
+            visible = store.visibility(owner_id, [normalized])
+            if visible:
+                names = visible[0].get("viewers") or []
+            viewers = [(known[name], name) for name in names if name in known]
+            set_shares(image_id, viewers, owner_id)
+            mark_migration(share_migration_key(image_id))
+        except Exception as exc:
+            print(f"[Usgromana-Gallery] Legacy share migration failed: {exc}")
+
+
+def viewer_can_open(user_id: str | None, username: str | None, owner_id: str, relpath: str) -> bool:
+    store = get_share_store()
+    if user_id and user_id == owner_id and store.resolve_owned_file(owner_id, relpath):
+        return True
+    row = _migrated_image(owner_id, relpath)
+    if row is not None:
+        from .social_store import has_share
+
+        return has_share(row["image_id"], user_id)
+    if store.can_view(user_id, username, owner_id, relpath):
+        return True
+    try:
+        from .social_store import get_image_by_path, has_share
+
+        found = get_image_by_path(owner_id, relpath)
+    except Exception:
+        return False
+    return bool(found and has_share(found["image_id"], user_id))
+
+
+def _shared_row(owner_id: str, relpath: str, filename: str, size: int, mtime: float) -> dict:
+    rel = f"shared/{owner_id}/{relpath}"
+    quoted = quote(rel, safe="")
+    return {
+        "filename": filename,
+        "relpath": rel,
+        "size": size,
+        "mtime": mtime,
+        "mtime_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+        "folder": "Shared with you",
+        "shared": True,
+        "owner_id": owner_id,
+        "url": f"{ROUTE_PREFIX}/image?filename={quoted}",
+        "thumb_url": f"{ROUTE_PREFIX}/image?filename={quoted}&size=thumb",
+    }
+
+
 def _shared_rows(viewer_user_id: str | None, viewer_username: str | None) -> list[dict]:
-    if not viewer_username:
+    if not viewer_username and not viewer_user_id:
         return []
     rows = []
-    for item in get_share_store().shares_for_viewer(viewer_username):
-        if viewer_user_id and item["owner_id"] == viewer_user_id:
-            continue
-        rel = item["shared_relpath"]
-        quoted = quote(rel, safe="")
-        rows.append(
-            {
-                "filename": item["filename"],
-                "relpath": rel,
-                "size": item["size"],
-                "mtime": item["mtime"],
-                "mtime_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(item["mtime"])),
-                "folder": "Shared with you",
-                "shared": True,
-                "owner_id": item["owner_id"],
-                "url": f"{ROUTE_PREFIX}/image?filename={quoted}",
-                "thumb_url": f"{ROUTE_PREFIX}/image?filename={quoted}&size=thumb",
-            }
-        )
+    seen = set()
+    if viewer_user_id:
+        try:
+            from .social_store import shared_images_for_viewer
+
+            root = accounts.global_output_dir()
+            for item in shared_images_for_viewer(viewer_user_id):
+                if item["owner_id"] == viewer_user_id:
+                    continue
+                full = os.path.join(root, item["owner_id"], *item["relpath"].split("/"))
+                if not os.path.isfile(full):
+                    continue
+                stat = os.stat(full)
+                seen.add((item["owner_id"], item["relpath"]))
+                rows.append(
+                    _shared_row(
+                        item["owner_id"],
+                        item["relpath"],
+                        item.get("filename") or os.path.basename(item["relpath"]),
+                        stat.st_size,
+                        stat.st_mtime,
+                    )
+                )
+        except Exception as exc:
+            print(f"[Usgromana-Gallery] Could not list shared images: {exc}")
+    if viewer_username:
+        for item in get_share_store().shares_for_viewer(viewer_username):
+            key = (item["owner_id"], item["relpath"])
+            if key in seen or (viewer_user_id and item["owner_id"] == viewer_user_id):
+                continue
+            if _migrated_image(item["owner_id"], item["relpath"]):
+                continue
+            rows.append(
+                _shared_row(
+                    item["owner_id"],
+                    item["relpath"],
+                    item["filename"],
+                    item["size"],
+                    item["mtime"],
+                )
+            )
     return rows
 
 
@@ -275,7 +409,7 @@ def _shared_file_response(request: web.Request, user_id: str | None, username: s
         return None
     owner_id, relpath = parsed
     store = get_share_store()
-    if not store.can_view(user_id, username, owner_id, relpath):
+    if not viewer_can_open(user_id, username, owner_id, relpath):
         return _json_error("Access denied", 403)
     file_path = store.resolve_owned_file(owner_id, relpath)
     if not file_path:
@@ -337,7 +471,7 @@ def _workflow_file(filename: str, user_id: str | None, username: str | None):
             return _json_error("File not found", 404)
         owner_id, relpath = parsed
         store = get_share_store()
-        if not store.can_view(user_id, username, owner_id, relpath):
+        if not viewer_can_open(user_id, username, owner_id, relpath):
             return _json_error("Access denied", 403)
         file_path = store.resolve_owned_file(owner_id, relpath)
         if not file_path:

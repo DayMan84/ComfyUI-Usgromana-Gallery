@@ -407,6 +407,29 @@ function openSettingsModal(panel) {
         addToggle("Anchor Gallery pill to top bar", "anchorToManagerBar");
         addToggle("Enable real-time file updates", "enableRealTimeUpdates");
         addToggle("Use polling file observer", "usePollingObserver");
+
+        const addSlide = (labelText, open) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.textContent = labelText + "  ›";
+            Object.assign(row.style, {
+                textAlign: "left",
+                background: "transparent",
+                color: "inherit",
+                border: "0",
+                cursor: "pointer",
+                padding: "4px 0",
+                fontSize: "12px",
+            });
+            row.onclick = () => open(row);
+            form.appendChild(row);
+        };
+        addSlide("Notifications", (anchor) => {
+            import("./settingsNotifications.js").then((mod) => mod.openNotificationSettings(anchor));
+        });
+        addSlide("Appearance", (anchor) => {
+            import("./settingsAppearance.js").then((mod) => mod.openAppearanceSettings(anchor));
+        });
         
         // Initialize checkbox states from current settings
         const toggles = form.querySelectorAll('input[type="checkbox"]');
@@ -1126,6 +1149,7 @@ function openFilterPanel() {
             ["time", "Time"],
             ["size", "File size"],
             ["pixels", "Pixel count"],
+            ["rating", "Rating"],
         ];
         arrangeOptions.forEach(([value, label]) => {
             const o = document.createElement("option");

@@ -90,6 +90,24 @@ def _unique_path(directory: str, filename: str) -> str:
         number += 1
 
 
+def _attach_image_identity(root: str, item: dict, owner_id: str, username: str | None) -> str | None:
+    try:
+        from .image_identity import ensure_image_identity
+
+        full = os.path.join(root, *item["relpath"].split("/"))
+        return ensure_image_identity(
+            full,
+            owner_id or "local",
+            owner_username=username,
+            storage_type="library",
+            relpath=item["relpath"],
+            owner_root=root,
+        )
+    except Exception as exc:
+        print(f"[Usgromana-Gallery] Image identity registration failed: {exc}")
+        return None
+
+
 def register() -> None:
     from aiohttp import web
     from server import PromptServer
@@ -101,9 +119,11 @@ def register() -> None:
 
     @PromptServer.instance.routes.post(f"{prefix}/upload")
     async def gallery_upload(request: web.Request) -> web.Response:
+        owner_id = "local"
+        username = None
         if accounts.installed():
-            user_id, _username = accounts.caller_from_request(request)
-            if not user_id:
+            owner_id, username = accounts.caller_from_request(request)
+            if not owner_id:
                 return web.json_response(
                     {"ok": False, "error": "Sign in to add images to your library"},
                     status=401,
@@ -140,7 +160,11 @@ def register() -> None:
         root = get_gallery_root_dir()
         for filename, data in pending:
             try:
-                saved.append(save_uploaded_image(root, filename, data, folder))
+                item = save_uploaded_image(root, filename, data, folder)
+                image_id = _attach_image_identity(root, item, owner_id, username)
+                if image_id:
+                    item["image_id"] = image_id
+                saved.append(item)
             except UploadError as exc:
                 errors.append({"filename": filename, "error": str(exc)})
 

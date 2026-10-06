@@ -1,8 +1,8 @@
 // ComfyUI-Usgromana-Gallery/web/core/themeManager.js
 // Manages theme application across all UI components
 
-import { getTheme } from "./themes.js";
 import { getGallerySettings, subscribeGallerySettings } from "./gallerySettings.js";
+import { applyResolvedTheme, loadAppearance } from "./appearance.js";
 
 let currentTheme = null;
 let themeListeners = new Set();
@@ -12,7 +12,7 @@ let themeListeners = new Set();
  */
 export function applyTheme(themeName = null) {
     const settings = getGallerySettings();
-    const theme = getTheme(themeName || settings.theme || "dark");
+    const theme = applyResolvedTheme(themeName || settings.theme || "dark");
     currentTheme = theme;
     
     // Notify all listeners
@@ -63,6 +63,7 @@ export function subscribeTheme(fn) {
 export function initThemeSystem() {
     // Apply initial theme
     applyTheme();
+    loadAppearance();
     
     // Subscribe to settings changes to update theme
     subscribeGallerySettings((settings) => {

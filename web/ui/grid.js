@@ -22,6 +22,7 @@ import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { debounce, unloadImage } from "../core/utils.js";
 import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js"; 
 import { bindImageContextMenu } from "./imageMenu.js";
+import { getRatingMap } from "../core/socialApi.js";
 
 let rootEl = null;
 let gridContentEl = null;
@@ -258,6 +259,7 @@ export async function reloadImagesAndRender() {
         // NOTE: Don't update lastImageCount here - let the subscription callback handle it
         // This prevents race conditions where lastImageCount is updated before subscription fires
         setImages(images, true);   // subscribe() → renderGridContent()
+        applyCommunityRatings();
         
         // Pre-generate thumbnails in the background for faster loading
         // Don't await - let it run in background
@@ -360,6 +362,12 @@ function getArrangeValue(img, arrangeBy) {
             const w = img.width || img.w || img.resolution_x || 0;
             const h = img.height || img.h || img.resolution_y || 0;
             return w * h;
+        }
+        case "rating": {
+            // Community average when other people have rated, then the existing rating.
+            // Filename remains the tie-breaker in the sorter.
+            if (img.community_count > 0 && typeof img.community_average === "number") return img.community_average;
+            return getRatingForImage(img) || 0;
         }
         default: return 0;
     }
@@ -1468,6 +1476,13 @@ function createCard(img, index) {
             starEl.onclick = (ev) => { ev.stopPropagation(); setRating(img, star); };
             ratingOverlay.appendChild(starEl);
         }
+        if (img.community_count > 0 && typeof img.community_average === "number") {
+            const community = document.createElement("span");
+            community.textContent = img.community_average.toFixed(1);
+            community.style.marginLeft = "4px";
+            community.style.color = "var(--usg-star, #ffd86b)";
+            ratingOverlay.appendChild(community);
+        }
         frame.appendChild(ratingOverlay);
     }
 
@@ -1546,7 +1561,28 @@ function createCard(img, index) {
 // Ratings + persistence
 // ---------------------------------------------------------------------
 
+async function applyCommunityRatings() {
+    try {
+        const data = await getRatingMap();
+        const ratings = data.ratings || {};
+        let changed = false;
+        for (const img of getImages()) {
+            const key = img.relpath || img.filename;
+            const info = ratings[key];
+            if (!info) continue;
+            img.image_id = info.image_id;
+            img.community_average = info.count > 0 ? info.average : (info.legacy || null);
+            img.community_count = info.count || 0;
+            changed = true;
+        }
+        if (changed) renderGridContent();
+    } catch (err) {
+        console.warn("[UsgromanaGallery] Community ratings are unavailable:", err);
+    }
+}
+
 function getRatingForImage(img) {
+    if (img && img.community_count > 0 && typeof img.community_average === "number") return img.community_average;
     // Check img.rating first (from image data, may come from metadata)
     if (typeof img.rating === "number") return img.rating;
     // Check ratingMap (from server ratings endpoint)
