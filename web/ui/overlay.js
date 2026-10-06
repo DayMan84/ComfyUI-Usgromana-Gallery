@@ -1,1 +1,1 @@
-$file:/tmp/ov/raw-overlay.js
+$file:/opt/ComfyUI/custom_nodes/Usgromana-Gallery/web/ui/overlay.js
