@@ -6,7 +6,7 @@
 A comprehensive image gallery extension for ComfyUI that provides advanced image management, metadata editing, NSFW content filtering, real-time file monitoring, and a full-featured file explorer.
 
 <p align="center">
-  <img src="./README/drag-drop.png" width="220" />
+  <img src="./README/Gallery-Preview.png" width="700" />
 </p>
 ## Overview
 
@@ -26,6 +26,29 @@ ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interact
 - **Window Management**: Pin/unpin the gallery window, move and resize it, with click-through support when unpinned
 - **Theme Support**: Dark and light themes with automatic text color adaptation
 
+<p align="center">
+  <img src="./README/preview-info-comments.png" width="700" />
+  <img src="./README/Zoomed.png" width="700" />  
+</p>
+
+<p align="center">
+  <img src="./README/drag-drop.png" width="300" />
+  <img src="./README/Explore-large.png" width="300" />
+  <img src="./README/Details-view.png" width="300" />
+</p>
+
+<p align="center">
+  <img src="./README/Appearance.png" width="300" />
+  <img src="./README/Filters.png" width="300" />
+  <img src="./README/Settings-Menu.png" width="300" />
+</p>
+
+<p align="center">
+  <img src="./README/image-sharing.png" width="300" />
+  <img src="./README/share-commentor.png" width="250" />
+  <img src="./README/Notification.png" width="180" />
+  <img src="./README/Meta-tags.png" width="250" />
+</p>
 ---
 
 ## Features
