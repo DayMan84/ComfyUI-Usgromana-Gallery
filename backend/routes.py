@@ -1,2 +1,1 @@
-from pathlib import Path
-print('skip')
+<FULL_FILE_NEXT>
