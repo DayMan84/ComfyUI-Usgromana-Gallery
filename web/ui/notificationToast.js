@@ -100,7 +100,7 @@ function build(note) {
     text.textContent = note.message || "You have a gallery notification.";
     const close = document.createElement("button");
     close.type = "button";
-    close.textContent = "\u00d7";
+    close.textContent = "×";
     close.setAttribute("aria-label", "Dismiss notification");
     close.style.cssText = "background:transparent;border:0;color:inherit;cursor:pointer;font-size:16px;";
     card.append(text, close);
