@@ -341,7 +341,7 @@ function openSettingsModal(panel) {
             cursor: "move",
             borderBottom: `1px solid ${theme.settingsBorder}`,
         });
-        
+
         const title = document.createElement("div");
         title.textContent = "Gallery Settings";
         Object.assign(title.style, {
