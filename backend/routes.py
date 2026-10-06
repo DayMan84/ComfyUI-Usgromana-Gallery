@@ -1,1 +1,2 @@
-# ComfyUI-Usgromana-Gallery/backend/routes.py
+from pathlib import Path
+print('skip')
