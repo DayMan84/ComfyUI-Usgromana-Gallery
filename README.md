@@ -34,11 +34,14 @@ ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interact
 <p align="center">
   <img src="./README/drag-drop.png" width="300" />
   <img src="./README/Explore-large.png" width="300" />
-  <img src="./README/Details-view.png" width="300" />
 </p>
 
 <p align="center">
+  <img src="./README/Details-view.png" width="300" />
   <img src="./README/Appearance.png" width="300" />
+</p>
+
+<p align="center">
   <img src="./README/Filters.png" width="300" />
   <img src="./README/Settings-Menu.png" width="300" />
 </p>
@@ -46,6 +49,9 @@ ComfyUI-Usgromana-Gallery transforms ComfyUI's output directory into an interact
 <p align="center">
   <img src="./README/image-sharing.png" width="300" />
   <img src="./README/share-commentor.png" width="250" />
+</p>
+
+<p align="center">
   <img src="./README/Notification.png" width="180" />
   <img src="./README/Meta-tags.png" width="250" />
 </p>
