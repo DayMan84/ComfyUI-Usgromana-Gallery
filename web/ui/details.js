@@ -7,6 +7,7 @@ import { galleryApi } from "../core/api.js";
 import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { formatFileSize, formatDate, unloadImage } from "../core/utils.js";
+import { attachPreviewControls, onPreviewHide, onPreviewImage, onPreviewLayout, registerPreviewHost } from "./previewSocial.js";
 
 let modalEl = null;
 let cardEl = null;
@@ -16,6 +17,7 @@ let btnMeta = null;
 let btnOpen = null;
 let btnClose = null;
 let btnZoom = null;
+let topControls = null;
 
 // Zoom and drag state
 let zoomEnabled = false;
@@ -197,7 +199,7 @@ export function initDetails(_rootIgnored) {
     setupZoomAndDrag();
 
     // top-right buttons
-    const topControls = document.createElement("div");
+    topControls = document.createElement("div");
     Object.assign(topControls.style, {
         position: "absolute",
         top: "10px",
@@ -225,7 +227,7 @@ export function initDetails(_rootIgnored) {
         return b;
     };
 
-    btnClose = mkBtn("✖", "Close");
+    btnClose = mkBtn("❌", "Close");
     btnClose.onclick = (ev) => {
         ev.stopPropagation();
         hideDetails();
@@ -253,6 +255,7 @@ export function initDetails(_rootIgnored) {
     topControls.appendChild(btnMeta);
     topControls.appendChild(btnOpen);
     topControls.appendChild(btnZoom);
+    attachPreviewControls();
     cardEl.appendChild(topControls);
 
     // side tiles
@@ -812,6 +815,7 @@ export async function showDetailsForIndex(index) {
         const loadingSpinner = cardEl?.querySelector(".details-loading-spinner");
         if (loadingSpinner) loadingSpinner.style.display = "none";
         imgEl.style.opacity = "1";
+        onPreviewImage();
         
         // Remove will-change after image loads to free resources
         if (imgEl.style.willChange) {
@@ -1158,6 +1162,7 @@ export function hideDetails() {
 
     // persistent overlay: do NOT remove from DOM
     modalEl.style.display = "none";
+    onPreviewHide();
     modalEl.style.backdropFilter = "none";
 
     // wipe the 3 live images (proper cleanup)
@@ -1249,6 +1254,7 @@ function updateMetadataPanelPosition() {
 
 function toggleMetadata() {
     metadataVisible = !metadataVisible;
+    onPreviewLayout();
 
     if (metadataVisible) {
         metaPanel.style.display = "flex";
@@ -2338,8 +2344,16 @@ function updateImageTransform() {
     if (!imgEl) return;
     
     imgEl.style.transform = `scale(${currentZoom}) translate(${currentPanX / currentZoom}px, ${currentPanY / currentZoom}px)`;
+    onPreviewLayout();
     
     if (imgEl.style.cursor !== "grabbing") {
         imgEl.style.cursor = zoomEnabled && currentZoom > 1.0 ? "grab" : "default";
     }
 }
+
+registerPreviewHost({
+    getImages,
+    showIndex: (index) => showDetailsForIndex(index),
+    getElements: () => ({ imgEl, cardEl, topControls, modalEl, metaPanel }),
+    getImageInfo: () => currentImageInfo,
+});
