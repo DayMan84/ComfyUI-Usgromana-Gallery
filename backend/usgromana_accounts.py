@@ -116,16 +116,39 @@ def caller_from_request(request) -> tuple[str | None, str | None]:
 
 
 def known_usernames() -> set[str]:
+    return {account["username"] for account in known_accounts()} | _guest_names()
+
+
+def _guest_names() -> set[str]:
     globs = _globals()
     if globs is None:
         return set()
     users_db = globs.users_db
     users_db.load_users()
     return {
-        user.get("username")
+        str(user.get("username"))
         for user in users_db.users.values()
-        if isinstance(user, dict) and user.get("username")
+        if isinstance(user, dict) and str(user.get("username", "")).lower() == "guest"
     }
+
+
+def known_accounts() -> list[dict]:
+    """Signed-in accounts that can receive a share. The guest account is omitted."""
+    globs = _globals()
+    if globs is None:
+        return []
+    users_db = globs.users_db
+    users_db.load_users()
+    accounts = []
+    for user_id, user in users_db.users.items():
+        if not isinstance(user, dict):
+            continue
+        name = user.get("username")
+        if not name or str(name).lower() == "guest":
+            continue
+        accounts.append({"id": str(user_id), "username": str(name)})
+    accounts.sort(key=lambda item: item["username"].lower())
+    return accounts
 
 
 def global_output_dir() -> str:

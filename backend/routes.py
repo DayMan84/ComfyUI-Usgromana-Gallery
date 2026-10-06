@@ -1490,6 +1490,13 @@ async def gallery_rename_file(request: web.Request) -> web.Response:
         if ratings_updated:
             _save_ratings(ratings)
         
+        try:
+            from .image_identity import note_path_changed, request_owner_id
+            old_rel_for_identity = os.path.relpath(old_path, output_dir).replace("\\", "/")
+            note_path_changed(request_owner_id(), old_rel_for_identity, new_relpath)
+        except Exception as identity_exc:
+            print(f"[Usgromana-Gallery] Image identity path update failed: {identity_exc}")
+        
         return _json({"ok": True, "message": "File renamed successfully", "new_filename": new_relpath})
     except OSError as e:
         return _json({"ok": False, "error": f"Failed to rename file: {str(e)}"}, status=500)
@@ -2043,6 +2050,14 @@ async def gallery_rename_folder(request: web.Request) -> web.Response:
         
         os.rename(old_path, new_path)
         
+        try:
+            from .image_identity import note_prefix_changed, request_owner_id
+            old_rel = os.path.relpath(old_path, output_dir_abs).replace("\\", "/")
+            new_rel = os.path.relpath(new_path, output_dir_abs).replace("\\", "/")
+            note_prefix_changed(request_owner_id(), old_rel, new_rel)
+        except Exception as identity_exc:
+            print(f"[Usgromana-Gallery] Image identity folder update failed: {identity_exc}")
+        
         return _json({"ok": True, "message": "Folder renamed successfully"})
     except Exception as e:
         return _json({"ok": False, "error": str(e)}, status=500)
@@ -2083,6 +2098,13 @@ async def gallery_delete_folder(request: web.Request) -> web.Response:
         import shutil
         shutil.rmtree(target_path)
         
+        try:
+            from .image_identity import note_prefix_removed, request_owner_id
+            removed_rel = os.path.relpath(target_path, output_dir_abs).replace("\\", "/")
+            note_prefix_removed(request_owner_id(), removed_rel)
+        except Exception as identity_exc:
+            print(f"[Usgromana-Gallery] Image identity folder removal failed: {identity_exc}")
+        
         return _json({"ok": True, "message": "Folder deleted successfully"})
     except Exception as e:
         return _json({"ok": False, "error": str(e)}, status=500)
@@ -2106,6 +2128,14 @@ async def gallery_delete_file(request: web.Request) -> web.Response:
             return _json({"ok": False, "error": "File not found"}, status=404)
         
         os.remove(safe_path)
+        
+        try:
+            from .image_identity import note_image_removed, request_owner_id
+            output_dir = get_gallery_root_dir()
+            removed_rel = os.path.relpath(safe_path, output_dir).replace("\\", "/")
+            note_image_removed(request_owner_id(), removed_rel)
+        except Exception as identity_exc:
+            print(f"[Usgromana-Gallery] Image identity removal failed: {identity_exc}")
         
         # Also try to delete thumbnail if it exists
         try:
@@ -2177,6 +2207,14 @@ async def gallery_move_file(request: web.Request) -> web.Response:
             return _json({"ok": False, "error": "A file with that name already exists in the target folder"}, status=409)
         
         os.rename(safe_source, target_path)
+        
+        try:
+            from .image_identity import note_path_changed, request_owner_id
+            old_rel = os.path.relpath(safe_source, output_dir).replace("\\", "/")
+            moved_rel = os.path.relpath(target_path, output_dir).replace("\\", "/")
+            note_path_changed(request_owner_id(), old_rel, moved_rel)
+        except Exception as identity_exc:
+            print(f"[Usgromana-Gallery] Image identity move failed: {identity_exc}")
         
         # Also try to move thumbnail if it exists
         try:

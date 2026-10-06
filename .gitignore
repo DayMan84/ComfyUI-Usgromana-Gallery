@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 data/image_shares.json
+
+data/gallery_social.db
+data/gallery_social.db-wal
+data/gallery_social.db-shm

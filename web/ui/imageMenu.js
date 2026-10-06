@@ -6,7 +6,11 @@
  */
 
 import { galleryApi } from "../core/api.js";
+import { ensureImage } from "../core/socialApi.js";
 import { hideDetails } from "./details.js";
+import { CommentsPanel } from "./commentsPanel.js";
+import { createSlideoutMenu } from "./slideoutMenu.js";
+import { openShareSlideout } from "./shareSlideout.js";
 
 const SHARE_API = "/usgromana-gallery/shares";
 let shareGate = { available: null, enabled: false };
@@ -123,8 +127,9 @@ function showMenu(x, y, items) {
         };
         button.onclick = (event) => {
             event.stopPropagation();
-            closeMenu();
-            Promise.resolve(item.action()).catch((err) => {
+            const run = item.keepOpen ? item.action(button, menu) : item.action();
+            if (!item.keepOpen) closeMenu();
+            Promise.resolve(run).catch((err) => {
                 openDialog({
                     title: item.label,
                     body: `<p>${escapeText(err.message || err)}</p>`,
@@ -354,8 +359,32 @@ async function openImageMenu(x, y, image) {
     const gate = owned ? await refreshShareGate() : { enabled: false };
     const items = [];
     if (owned && gate.enabled) {
-        items.push({ label: "Share", action: () => openShareDialog(relpath) });
+        items.push({
+            label: "Share  ›",
+            keepOpen: true,
+            action: async (button, menu) => {
+                const ensured = await ensureImage(relpath);
+                await openShareSlideout(button, menu, ensured.image_id);
+            },
+        });
     }
+    items.push({
+        label: "Comments  ›",
+        keepOpen: true,
+        action: async (button, menu) => {
+            const ensured = await ensureImage(relpath);
+            const panel = new CommentsPanel({ imageId: ensured.image_id, mode: "slideout" });
+            createSlideoutMenu({
+                anchor: button,
+                parentMenu: menu,
+                title: "Comments",
+                width: 340,
+                maxHeight: 560,
+                content: panel.element,
+            });
+            await panel.load();
+        },
+    });
     items.push({ label: "Workflow", action: () => openWorkflow(relpath, filename) });
     if (owned) {
         items.push({ label: "Remove", action: () => confirmRemove(relpath, filename) });

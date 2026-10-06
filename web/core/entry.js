@@ -14,6 +14,8 @@ import {
 } from "./gallerySettings.js";
 import { initDragDrop } from "./dragDrop.js";
 import { initThemeSystem } from "./themeManager.js";
+import { startNotificationPolling } from "./notifications.js";
+import { loadAppearance } from "./appearance.js";
 
 let initialized = false;
 let loading = false;
@@ -498,6 +500,8 @@ export async function initGalleryExtension() {
     
     // Initialize drag and drop functionality
     initDragDrop();
+    startNotificationPolling();
+    loadAppearance();
 
     // Keep button alive even if Vue re-renders the actionbar
     startAnchorWatch();

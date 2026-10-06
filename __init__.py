@@ -51,3 +51,16 @@ def _safe_import_library_upload():
 
 
 _safe_import_library_upload()
+
+
+def _safe_import_social():
+    """Comments, ratings, shares, and notifications keyed by image id."""
+    try:
+        importlib.import_module(".backend.social_http", __name__)
+        importlib.import_module(".backend.notification_http", __name__)
+    except Exception as e:
+        print("[Usgromana-Gallery] ERROR: failed to import social gallery:", e)
+        traceback.print_exc()
+
+
+_safe_import_social()
