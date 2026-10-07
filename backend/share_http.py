@@ -384,6 +384,22 @@ def _nsfw_blocked(path: str, username: str | None) -> bool:
 
 def _thumbnail_bytes(path: str) -> tuple[bytes, str]:
     import mimetypes
+    import tempfile
+
+    from .files import is_video_filename, write_thumbnail
+
+    if is_video_filename(path):
+        handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        handle.close()
+        try:
+            write_thumbnail(path, handle.name)
+            with open(handle.name, "rb") as poster:
+                return poster.read(), "image/png"
+        finally:
+            try:
+                os.remove(handle.name)
+            except OSError:
+                pass
 
     try:
         import io

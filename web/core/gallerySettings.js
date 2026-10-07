@@ -24,9 +24,15 @@ const DEFAULT_SETTINGS = {
 
     // Where to anchor the launch pill
     openButtonBoxQuery: ".actionbar-container .comfyui-button-group:nth-of-type(2)",
+
+    // Floating Gallery pill scale. 1 is the original size.
+    galleryButtonScale: 1,
+
+    // Video thumbnails: "always" | "hover" | "static"
+    videoThumbnailMode: "hover",
     
     // File monitoring
-    fileExtensions: ".png,.jpg,.jpeg,.webp,.gif,.bmp", // Comma-separated list
+    fileExtensions: ".png,.jpg,.jpeg,.webp,.gif,.bmp,.mp4,.webm", // Comma-separated list
     usePollingObserver: false, // Use polling instead of native file watcher
     enableRealTimeUpdates: true, // Enable real-time file monitoring
     

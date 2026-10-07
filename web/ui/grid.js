@@ -23,6 +23,13 @@ import { debounce, unloadImage } from "../core/utils.js";
 import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js"; 
 import { bindImageContextMenu } from "./imageMenu.js";
 import { getRatingMap } from "../core/socialApi.js";
+import { createMediaThumb, mediaUrls } from "./mediaThumb.js";
+import {
+    knownTags,
+    itemTags,
+    matchesMediaFilter,
+    matchesTagFilter,
+} from "../core/mediaFilters.js";
 
 let rootEl = null;
 let gridContentEl = null;
@@ -32,6 +39,12 @@ let lastState = null;
 let lastImageCount = 0; // Track previous image count separately to detect deletions
 let ratingMap = new Map();
 let minRatingFilter = 0;
+let mediaTypeFilter = "all"; // "all" | "image" | "video"
+let selectedTagFilters = [];
+let tagQuery = "";
+let tagFilterInput = null;
+let tagChipsEl = null;
+let tagSuggestEl = null;
 let gallerySettings = getGallerySettings();
 let searchQuery = "";
 let unsubscribeState = null;
@@ -86,8 +99,11 @@ function ensureGalleryGridStyles() {
     const style = document.createElement("style");
     style.id = "usg-gallery-grid-style";
     style.textContent = `
-        .usg-gallery-grid img {
+        .usg-gallery-grid img,
+        .usg-gallery-grid video {
             border-radius: inherit;
+        }
+        .usg-gallery-grid img {
             display: block;
         }
         /* CRITICAL PERF FIX: Prevents layout calc for off-screen cards */
@@ -562,7 +578,7 @@ function buildStaticUI() {
     const filterBar = document.createElement("div");
     Object.assign(filterBar.style, {
         display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: theme.textTertiary,
-        marginBottom: "10px", flexShrink: "0", width: "100%", boxSizing: "border-box",
+        marginBottom: "10px", flexShrink: "0", width: "100%", boxSizing: "border-box", flexWrap: "wrap",
     });
 
     // 1. Search
@@ -584,6 +600,35 @@ function buildStaticUI() {
         debouncedRender();
     });
     filterBar.appendChild(searchInput);
+
+    // Media type: all / photos / videos. Composes with search, rating, and tags.
+    const mediaLabel = document.createElement("span");
+    mediaLabel.textContent = "Show:";
+    mediaLabel.style.opacity = "0.7";
+    filterBar.appendChild(mediaLabel);
+    [
+        { label: "All", value: "all" },
+        { label: "Photos", value: "image" },
+        { label: "Videos", value: "video" },
+    ].forEach((opt) => {
+        const btn = document.createElement("button");
+        btn.textContent = opt.label;
+        btn.dataset.mediaType = opt.value;
+        btn.id = `usg-media-filter-${opt.value}`;
+        Object.assign(btn.style, {
+            borderRadius: "999px", border: `1px solid ${theme.cardBorder}`,
+            padding: "2px 8px", fontSize: "11px", cursor: "pointer",
+            background: theme.cardBackground, color: theme.textPrimary, opacity: "0.75",
+        });
+        btn.onclick = () => {
+            mediaTypeFilter = opt.value;
+            updateMediaFilterButtons();
+            renderGridContent();
+        };
+        filterBar.appendChild(btn);
+    });
+
+    buildTagFilter(filterBar, theme);
 
     // 2. Rating Filters
     const filterLabel = document.createElement("span");
@@ -731,7 +776,176 @@ function buildStaticUI() {
     createLoadingIndicator();
 
     updateFilterButtons();
+    updateMediaFilterButtons();
     updateBatchButtons();
+    syncTagFilterUI();
+}
+
+function buildTagFilter(filterBar, theme) {
+    const wrap = document.createElement("div");
+    wrap.className = "usg-tag-filter";
+    Object.assign(wrap.style, {
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        flex: "1",
+        minWidth: "160px",
+    });
+
+    tagChipsEl = document.createElement("div");
+    Object.assign(tagChipsEl.style, {
+        display: "flex",
+        gap: "4px",
+        flexWrap: "wrap",
+    });
+
+    tagFilterInput = document.createElement("input");
+    tagFilterInput.type = "text";
+    tagFilterInput.placeholder = "Filter by tags…";
+    tagFilterInput.value = tagQuery;
+    tagFilterInput.setAttribute("aria-label", "Filter by tags");
+    Object.assign(tagFilterInput.style, {
+        flex: "1",
+        minWidth: "110px",
+        padding: "4px 8px",
+        borderRadius: "999px",
+        border: `1px solid ${theme.inputBorder}`,
+        background: theme.inputBackground,
+        color: theme.inputText,
+        fontSize: "11px",
+        outline: "none",
+    });
+    tagFilterInput.addEventListener("focus", () => {
+        window.__USG_GALLERY_CAPTURE__ = true;
+        if (tagSuggestEl) tagSuggestEl.style.display = "block";
+        syncTagFilterUI();
+    });
+    tagFilterInput.addEventListener("blur", () => {
+        window.__USG_GALLERY_CAPTURE__ = false;
+        setTimeout(() => {
+            if (tagSuggestEl) tagSuggestEl.style.display = "none";
+        }, 150);
+    });
+    ["keydown", "keyup", "keypress"].forEach((evt) => {
+        tagFilterInput.addEventListener(evt, (ev) => ev.stopPropagation());
+    });
+    tagFilterInput.addEventListener("input", () => {
+        tagQuery = tagFilterInput.value || "";
+        if (tagSuggestEl) tagSuggestEl.style.display = "block";
+        debouncedRender();
+    });
+
+    tagSuggestEl = document.createElement("div");
+    Object.assign(tagSuggestEl.style, {
+        display: "none",
+        position: "absolute",
+        top: "calc(100% + 4px)",
+        left: "0",
+        right: "0",
+        zIndex: "30",
+        maxHeight: "180px",
+        overflowY: "auto",
+        padding: "4px",
+        borderRadius: "10px",
+        border: `1px solid ${theme.inputBorder}`,
+        background: theme.filterBackground || theme.inputBackground,
+        boxShadow: "0 10px 24px rgba(0,0,0,0.35)",
+    });
+
+    wrap.appendChild(tagChipsEl);
+    wrap.appendChild(tagFilterInput);
+    wrap.appendChild(tagSuggestEl);
+    filterBar.appendChild(wrap);
+}
+
+function syncTagFilterUI() {
+    if (!tagChipsEl || !tagSuggestEl || !tagFilterInput) return;
+    const theme = getCurrentTheme();
+    tagChipsEl.innerHTML = "";
+    selectedTagFilters.forEach((tag) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.textContent = `${tag} ×`;
+        chip.title = `Remove tag ${tag}`;
+        Object.assign(chip.style, {
+            borderRadius: "999px",
+            border: `1px solid ${theme.buttonBorder}`,
+            background: theme.buttonActiveBackground || theme.buttonBackground,
+            color: theme.textPrimary,
+            fontSize: "10px",
+            padding: "1px 6px",
+            cursor: "pointer",
+        });
+        chip.onclick = (ev) => {
+            ev.stopPropagation();
+            selectedTagFilters = selectedTagFilters.filter(
+                (item) => item.toLowerCase() !== tag.toLowerCase()
+            );
+            renderGridContent();
+        };
+        tagChipsEl.appendChild(chip);
+    });
+
+    if (document.activeElement !== tagFilterInput) {
+        tagFilterInput.value = tagQuery;
+    }
+
+    const typed = (tagQuery || "").trim().toLowerCase();
+    const tags = knownTags(getAllImagesRaw()).filter((tag) => !typed || tag.toLowerCase().includes(typed));
+    tagSuggestEl.innerHTML = "";
+    if (!tags.length) {
+        const empty = document.createElement("div");
+        empty.textContent = "No tags yet";
+        empty.style.padding = "6px 8px";
+        empty.style.opacity = "0.7";
+        tagSuggestEl.appendChild(empty);
+        return;
+    }
+    tags.forEach((tag) => {
+        const selected = selectedTagFilters.some((item) => item.toLowerCase() === tag.toLowerCase());
+        const row = document.createElement("button");
+        row.type = "button";
+        row.textContent = selected ? `✓ ${tag}` : tag;
+        Object.assign(row.style, {
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            border: "none",
+            background: "transparent",
+            color: theme.textPrimary,
+            fontSize: "11px",
+            padding: "4px 8px",
+            cursor: "pointer",
+            borderRadius: "6px",
+        });
+        row.onmousedown = (ev) => ev.preventDefault();
+        row.onclick = (ev) => {
+            ev.stopPropagation();
+            if (selected) {
+                selectedTagFilters = selectedTagFilters.filter(
+                    (item) => item.toLowerCase() !== tag.toLowerCase()
+                );
+            } else {
+                selectedTagFilters = selectedTagFilters.concat([tag]);
+            }
+            if (tagSuggestEl) tagSuggestEl.style.display = "block";
+            renderGridContent();
+        };
+        tagSuggestEl.appendChild(row);
+    });
+}
+
+function updateMediaFilterButtons() {
+    ["all", "image", "video"].forEach((val) => {
+        const btn = document.getElementById(`usg-media-filter-${val}`);
+        if (!btn) return;
+        const isActive = val === mediaTypeFilter;
+        const theme = getCurrentTheme();
+        btn.style.background = isActive ? theme.buttonActiveBackground : theme.cardBackground;
+        btn.style.color = theme.textPrimary;
+        btn.style.opacity = isActive ? "1" : "0.75";
+    });
 }
 
 function updateBatchButtons() {
@@ -986,12 +1200,15 @@ function renderGridContent() {
     let filtered = allImages.filter((img) => {
         const rating = getRatingForImage(img);
         if (rating < minRatingFilter) return false;
+        if (!matchesMediaFilter(img, mediaTypeFilter)) return false;
+        if (!matchesTagFilter(img, selectedTagFilters, tagQuery)) return false;
         if (searchQuery) {
             const q = searchQuery.toLowerCase();
             const fn = (img.filename || "").toLowerCase();
             const model = (img.model || img.model_name || "").toLowerCase();
             const prompt = (img.prompt || img.full_prompt || "").toLowerCase();
-            if (!fn.includes(q) && !model.includes(q) && !prompt.includes(q)) return false;
+            const tags = itemTags(img).join(" ").toLowerCase();
+            if (!fn.includes(q) && !model.includes(q) && !prompt.includes(q) && !tags.includes(q)) return false;
         }
         return true;
     });
@@ -1019,9 +1236,17 @@ function renderGridContent() {
     
     setVisibleImages(flatList);
 
+    updateMediaFilterButtons();
+    syncTagFilterUI();
+
     if (!flatList.length) {
         const empty = document.createElement("div");
-        empty.textContent = "No images found. Drop images here to add them to your library.";
+        const emptyText = mediaTypeFilter === "video"
+            ? "No videos found."
+            : mediaTypeFilter === "image"
+                ? "No photos found."
+                : "No images found. Drop images here to add them to your library.";
+        empty.textContent = emptyText;
         Object.assign(empty.style, {
             color: "#aaa", fontSize: "14px", textAlign: "center", marginTop: "40px", width: "100%",
         });
@@ -1249,214 +1474,62 @@ function createCard(img, index) {
         alignItems: "center", justifyContent: "center", width: "100%", position: "relative",
     });
 
-    const imgEl = document.createElement("img");
-
-    // Build safest thumbnail URL we can
-    // Always use relpath if available to ensure correct thumbnail mapping
     const rel = img.relpath || img.filename || "";
-    let thumbUrl =
-        img.thumb_url ||
-        (() => {
-            if (rel) {
-                const encoded = encodeURIComponent(rel);
-                return `${API_ENDPOINTS.IMAGE}?filename=${encoded}&size=thumb`;
-            }
-            return img.url || ""; // Fallback to full URL if no relpath
-        })();
+    const urls = mediaUrls(img);
+    let thumbUrl = urls.thumbUrl;
 
-    // #region agent log
-    // #endregion
-
-    // 🔹 Register thumbnail so Details & History can reuse it
     if (imageKey && thumbUrl) {
         registerThumbnail(imageKey, thumbUrl);
     }
 
-    imgEl.alt = img.filename || img.relpath || "";
-    imgEl.loading = "lazy";
-    imgEl.decoding = "async";
-    
-    // Check if this is a large image - if so, optimize loading
-    const imageSize = img.file_size || img.size || img.bytes || 0;
-    const isLargeImage = imageSize > 10 * 1024 * 1024; // > 10MB
-    
-    if (isLargeImage) {
-        // Use will-change hint for large images
-        imgEl.style.willChange = "contents";
-        // Ensure we're using thumbnail, not full-size
-        if (!thumbUrl.includes("size=thumb") && !thumbUrl.includes("_thumbs")) {
-            const rel = img.relpath || img.filename || "";
-            const encoded = encodeURIComponent(rel);
-            thumbUrl = `${API_ENDPOINTS.IMAGE}?filename=${encoded}&size=thumb`;
-        }
-    }
-
-    Object.assign(imgEl.style, {
-        width: "100%",
-        height: "auto",
-        objectFit: "contain",
-        display: "block",
-        borderRadius: "inherit",
-        opacity: "0",
-        transition: "opacity 0.2s ease",
-    });
-    
-    // Track image loading progress
     const imageName = img.filename || img.relpath || "Unknown";
-    const loadStartTime = Date.now();
-    
-    
-    // Track this image element
-    imageLoadProgress.imageElements.set(imageName, imgEl);
-    
-    // Use IntersectionObserver for better performance with large grids
-    if ("IntersectionObserver" in window) {
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach((entry) => {
-                if (entry.isIntersecting) {
-                    if (!imgEl.src) {
-                        imageLoadProgress.visible++;
-                        imgEl.src = thumbUrl;
-                        updateLoadingProgress(
-                            imageLoadProgress.loaded,
-                            imageLoadProgress.total,
-                            imageName,
-                            `Loading: ${imageName}`
-                        );
-                        
-                        // Check if image is already cached (browser cache)
-                        // If so, trigger onload immediately after a small delay
-                        // This ensures the onload handler is set up first
-                        setTimeout(() => {
-                            if (imgEl.complete && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
-                                // Image was cached, trigger onload manually
-                                if (imgEl.onload) {
-                                    imgEl.onload();
-                                }
-                            }
-                        }, 10);
-                    }
-                    observer.unobserve(imgEl);
-                }
-            });
-        }, { rootMargin: "50px" });
-        
-        // Store observer on element for potential cleanup
-        imgEl._intersectionObserver = observer;
-        observer.observe(imgEl);
-        
-        // #region agent log
-        // #endregion
-    } else {
-        // Fallback for browsers without IntersectionObserver - load immediately
-        imageLoadProgress.visible++;
-        imgEl.src = thumbUrl;
-        updateLoadingProgress(
-            imageLoadProgress.loaded,
-            imageLoadProgress.total,
-            imageName,
-            `Loading: ${imageName}`
-        );
-    }
-    
-    imgEl.onload = () => {
-        const loadTime = Date.now() - loadStartTime;
-        imageLoadProgress.loaded++;
-        
-        // Remove will-change after load to free resources
-        if (imgEl.style.willChange === "contents") {
-            requestAnimationFrame(() => {
-                imgEl.style.willChange = "auto";
-            });
-        }
-        
-        const imageSize = img.file_size || img.size || 0;
-        
-        // Use requestAnimationFrame to avoid blocking main thread
-        requestAnimationFrame(() => {
-            imgEl.style.opacity = "1";
-        });
-        
+    const noteLoadProgress = (failed) => {
+        if (failed) imageLoadProgress.failed++;
+        else imageLoadProgress.loaded++;
         const visibleTotal = imageLoadProgress.visible || imageLoadProgress.total;
         updateLoadingProgress(
             imageLoadProgress.loaded,
             imageLoadProgress.total,
             null,
-            `Loaded ${imageLoadProgress.loaded}/${visibleTotal} visible images`
+            failed
+                ? `Error loading ${imageName} (${imageLoadProgress.failed} failed)`
+                : `Loaded ${imageLoadProgress.loaded}/${visibleTotal} visible images`
         );
-        
-        // Hide loading indicator when all visible images have been attempted (loaded or failed)
-        // CRITICAL: Account for failed images (e.g., deleted files) so progress bar completes
         const attempted = imageLoadProgress.loaded + imageLoadProgress.failed;
         if (attempted >= visibleTotal && visibleTotal > 0) {
-            // Clear safety timeout since we're completing normally
             if (imageLoadProgress.progressTimeout) {
                 clearTimeout(imageLoadProgress.progressTimeout);
                 imageLoadProgress.progressTimeout = null;
             }
-            
-            // Cancel any previous hide timer
-            if (debounceTimer) {
-                clearTimeout(debounceTimer);
-            }
+            if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
-                // Double-check before hiding - ensure all visible images have been attempted
                 const currentAttempted = imageLoadProgress.loaded + imageLoadProgress.failed;
-                if (currentAttempted >= imageLoadProgress.visible && 
-                    imageLoadProgress.visible > 0) {
+                if (currentAttempted >= imageLoadProgress.visible && imageLoadProgress.visible > 0) {
                     hideLoadingIndicator();
                 }
                 debounceTimer = null;
             }, 500);
         }
     };
-    
-    // Handle cached images - if image is already loaded, trigger onload immediately
-    if (imgEl.complete && imgEl.naturalWidth > 0) {
-        // Image is already cached and loaded
-        setTimeout(() => {
-            if (imgEl.complete) {
-                imgEl.onload();
-            }
-        }, 0);
-    }
-    
-    imgEl.onerror = () => {
-        imageLoadProgress.failed++;
-        updateLoadingProgress(
-            imageLoadProgress.loaded,
-            imageLoadProgress.total,
-            null,
-            `Error loading ${imageName} (${imageLoadProgress.failed} failed)`
-        );
-        
-        // CRITICAL: Check if all visible images have been attempted (loaded or failed)
-        // This ensures progress bar completes even when images are deleted
-        const visibleTotal = imageLoadProgress.visible || imageLoadProgress.total;
-        const attempted = imageLoadProgress.loaded + imageLoadProgress.failed;
-        if (attempted >= visibleTotal && visibleTotal > 0) {
-            // Clear safety timeout since we're completing normally
-            if (imageLoadProgress.progressTimeout) {
-                clearTimeout(imageLoadProgress.progressTimeout);
-                imageLoadProgress.progressTimeout = null;
-            }
-            
-            // Cancel any previous hide timer
-            if (debounceTimer) {
-                clearTimeout(debounceTimer);
-            }
-            debounceTimer = setTimeout(() => {
-                // Double-check before hiding - ensure all visible images have been attempted
-                const currentAttempted = imageLoadProgress.loaded + imageLoadProgress.failed;
-                if (currentAttempted >= imageLoadProgress.visible && 
-                    imageLoadProgress.visible > 0) {
-                    hideLoadingIndicator();
-                }
-                debounceTimer = null;
-            }, 500);
-        }
-    };
-    frame.appendChild(imgEl);
+
+    const thumbEl = createMediaThumb(img, {
+        fit: "contain",
+        lazy: true,
+        alt: imageName,
+        onVisible: () => {
+            imageLoadProgress.visible++;
+            updateLoadingProgress(
+                imageLoadProgress.loaded,
+                imageLoadProgress.total,
+                imageName,
+                `Loading: ${imageName}`
+            );
+        },
+        onLoad: () => noteLoadProgress(false),
+        onError: () => noteLoadProgress(true),
+    });
+    imageLoadProgress.imageElements.set(imageName, thumbEl);
+    frame.appendChild(thumbEl);
 
     if (gallerySettings.showRatingInGrid) {
         const ratingOverlay = document.createElement("div");
@@ -1511,9 +1584,10 @@ function createCard(img, index) {
                 ev.dataTransfer.effectAllowed = "copy";
                 
                 // Also set a drag image (optional - shows preview while dragging)
-                if (imgEl && imgEl.complete) {
+                const dragVisual = thumbEl.querySelector("img, video") || thumbEl;
+                if (dragVisual && (dragVisual.complete || dragVisual.readyState > 0)) {
                     try {
-                        ev.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
+                        ev.dataTransfer.setDragImage(dragVisual, (dragVisual.width || 40) / 2, (dragVisual.height || 40) / 2);
                     } catch (e) {
                         // setDragImage might fail in some browsers, ignore
                     }

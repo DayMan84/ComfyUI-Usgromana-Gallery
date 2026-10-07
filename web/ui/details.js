@@ -8,10 +8,13 @@ import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { formatFileSize, formatDate, unloadImage } from "../core/utils.js";
 import { attachPreviewControls, onPreviewHide, onPreviewImage, onPreviewLayout, registerPreviewHost } from "./previewSocial.js";
+import { mediaKind } from "../core/mediaFilters.js";
+import { attachVideoSidePoster } from "./mediaThumb.js";
 
 let modalEl = null;
 let cardEl = null;
 let imgEl = null;
+let videoEl = null;
 
 let btnMeta = null;
 let btnOpen = null;
@@ -194,6 +197,18 @@ export function initDetails(_rootIgnored) {
         transformOrigin: "center center",
     });
     cardEl.appendChild(imgEl);
+
+    videoEl = document.createElement("video");
+    videoEl.controls = true;
+    videoEl.playsInline = true;
+    Object.assign(videoEl.style, {
+        maxWidth: "85vw",
+        maxHeight: "85vh",
+        borderRadius: "10px",
+        display: "none",
+        background: "#000",
+    });
+    cardEl.appendChild(videoEl);
     
     // Setup zoom and drag event listeners
     setupZoomAndDrag();
@@ -517,11 +532,32 @@ function navigateRelative(delta) {
     }
 }
 
-function resizeCardToImage() {
-    if (!imgEl || !cardEl) return;
+let previewVideoToken = 0;
+let sideThumbToken = 0;
 
-    const natW = imgEl.naturalWidth || 512;
-    const natH = imgEl.naturalHeight || 512;
+function assignSideThumb(img, item) {
+    if (!img) return;
+    const token = ++sideThumbToken;
+    img.dataset.sideToken = String(token);
+    const still = () => img.dataset.sideToken === String(token);
+    if (item && mediaKind(item) === "video") {
+        attachVideoSidePoster(img, item, still);
+        return;
+    }
+    img.onerror = null;
+    const thumb = item ? sidePreviewThumb(item) : "";
+    if (thumb) img.src = thumb;
+    else {
+        img.removeAttribute("src");
+        img.src = "";
+    }
+}
+
+function resizeCardToSize(natW, natH) {
+    if (!cardEl) return;
+
+    const width = natW > 0 ? natW : 512;
+    const height = natH > 0 ? natH : 512;
 
     // Account for metadata panel if visible
     let maxW = window.innerWidth * 0.8;
@@ -536,16 +572,16 @@ function resizeCardToImage() {
     const paddingW = 10 * 2 + 8 * 2;
     const paddingH = 10 * 2 + 8 * 2;
 
-    const scaleByWidth = (maxW - paddingW) / natW;
-    const scaleByHeight = (maxH - paddingH) / natH;
+    const scaleByWidth = (maxW - paddingW) / width;
+    const scaleByHeight = (maxH - paddingH) / height;
     const scale = Math.min(scaleByWidth, scaleByHeight, 1);
 
-    const imgDisplayW = natW * scale;
-    const imgDisplayH = natH * scale;
+    const displayW = width * scale;
+    const displayH = height * scale;
 
-    cardEl.style.width = `${Math.round(imgDisplayW + paddingW)}px`;
-    cardEl.style.height = `${Math.round(imgDisplayH + paddingH)}px`;
-    
+    cardEl.style.width = `${Math.round(displayW + paddingW)}px`;
+    cardEl.style.height = `${Math.round(displayH + paddingH)}px`;
+
     // Update metadata panel position after card resizes (if metadata is visible)
     if (metadataVisible && metaPanel) {
         // Use a small delay to ensure layout has updated
@@ -555,8 +591,90 @@ function resizeCardToImage() {
     }
 }
 
+function resizeCardToImage() {
+    if (!imgEl || !cardEl) return;
+    resizeCardToSize(imgEl.naturalWidth, imgEl.naturalHeight);
+}
+
 // --------------------------
 // Show / hide
+function sidePreviewThumb(item) {
+    if (!item) return null;
+    const rel = item.relpath || item.filename || "";
+    if (mediaKind(item) === "video" && rel) {
+        return `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
+    }
+    const existing = item.thumb_url || item.url || null;
+    if (existing) return existing;
+    if (!rel) return null;
+    return `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
+}
+
+function playPreviewFromStart(video, token) {
+    if (!video || token !== previewVideoToken) return;
+    try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
+    const attempt = video.play();
+    if (!attempt || typeof attempt.then !== "function") return;
+    attempt.then(() => {
+        if (token !== previewVideoToken) video.pause();
+    }).catch(() => {
+        if (token !== previewVideoToken) return;
+        // Autoplay with sound is often blocked. Muted playback still has to start.
+        video.muted = true;
+        video.defaultMuted = true;
+        video.setAttribute("muted", "");
+        try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
+        const retry = video.play();
+        if (retry && typeof retry.then === "function") {
+            retry.then(() => {
+                if (token !== previewVideoToken) video.pause();
+            }).catch(() => {});
+        }
+    });
+}
+
+function presentVideoDetails(url) {
+    const token = ++previewVideoToken;
+    if (imgEl) imgEl.style.display = "none";
+    if (!videoEl) return;
+    videoEl.style.display = "block";
+    videoEl.controls = true;
+    videoEl.playsInline = true;
+    videoEl.preload = "auto";
+    videoEl.pause();
+    const srcChanged = videoEl.getAttribute("src") !== url;
+    const start = () => {
+        if (token !== previewVideoToken || !videoEl) return;
+        if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+            resizeCardToSize(videoEl.videoWidth, videoEl.videoHeight);
+        }
+        playPreviewFromStart(videoEl, token);
+    };
+    if (srcChanged || videoEl.readyState < 1 || videoEl.videoWidth <= 0) {
+        videoEl.addEventListener("loadedmetadata", start, { once: true });
+    }
+    if (srcChanged) videoEl.src = url;
+    else if (videoEl.readyState >= 1 && videoEl.videoWidth > 0) start();
+
+    const spinner = cardEl && cardEl.querySelector(".details-loading-spinner");
+    if (spinner) spinner.style.display = "none";
+    onPreviewImage();
+}
+
+function dismissVideoDetails() {
+    previewVideoToken += 1;
+    if (videoEl) {
+        videoEl.pause();
+        videoEl.removeAttribute("src");
+        try { videoEl.load(); } catch (err) { /* element may already be detached */ }
+        videoEl.style.display = "none";
+        videoEl.muted = false;
+        videoEl.defaultMuted = false;
+        videoEl.removeAttribute("muted");
+    }
+    if (imgEl) imgEl.style.display = "block";
+}
+
 // --------------------------
 export async function showDetailsForIndex(index) {
     // CRITICAL: Increment navigation sequence to invalidate any stale concurrent calls
@@ -713,7 +831,16 @@ export async function showDetailsForIndex(index) {
     
     // Reset zoom and drag when switching images
     resetZoomAndDrag();
-    
+
+    const previewIsVideo = mediaKind(imgInfo) === "video";
+    if (previewIsVideo) {
+        presentVideoDetails(newImageUrl);
+        currentImageUrl = newImageUrl;
+    } else {
+        dismissVideoDetails();
+    }
+
+    if (!previewIsVideo) {
     // CRITICAL FIX: Only clear src if there's a potential collision (same filename)
     // This prevents browser from using cached image when navigating between images
     // with the same name but different folder paths, while avoiding unnecessary
@@ -1026,6 +1153,7 @@ export async function showDetailsForIndex(index) {
             }
         }
     }, delayAfterSrcClear); // Delay longer if src was cleared
+    } // still images keep the existing preview path
 
     // PREV/NEXT: thumbnails only, from state registry or existing thumb_url only.
     // Calculate prev/next indices - use filtered images if folder filter is active
@@ -1070,64 +1198,28 @@ export async function showDetailsForIndex(index) {
     leftTargetIndex = prevIndex >= 0 ? prevIndex : null;
     rightTargetIndex = nextIndex >= 0 ? nextIndex : null;
 
-    // Generate thumbnail URLs directly from image data to ensure correctness
-    // Don't rely on registry which may have stale/incorrect mappings
-    let prevThumb = null;
-    let nextThumb = null;
-    
-    if (prev) {
-        // Try thumb_url first (from backend), then generate from relpath
-        prevThumb = prev.thumb_url || prev.url || null;
-        if (!prevThumb) {
-            const rel = prev.relpath || prev.filename || "";
-            if (rel) {
-                prevThumb = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
-            }
-        }
-    }
-    
-    if (next) {
-        // Try thumb_url first (from backend), then generate from relpath
-        nextThumb = next.thumb_url || next.url || null;
-        if (!nextThumb) {
-            const rel = next.relpath || next.filename || "";
-            if (rel) {
-                nextThumb = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
-            }
-        }
-    }
-
-    // Update left/right tiles with proper visibility
+    // Side buttons. Photos keep their thumb. Videos use the generated poster,
+    // blurred by the same filter as the photo thumbs.
     if (leftTile) {
-        if (prevThumb && leftTargetIndex != null) {
-            if (leftTileImg) {
-                leftTileImg.src = prevThumb;
-            }
+        if (prev && leftTargetIndex != null) {
+            assignSideThumb(leftTileImg, prev);
             leftTile.style.opacity = "1";
             leftTile.style.pointerEvents = "auto";
         } else {
-            if (leftTileImg) {
-                leftTileImg.src = "";
-                leftTileImg.removeAttribute("src");
-            }
+            assignSideThumb(leftTileImg, null);
             // Keep tiles visible even with one image (they'll wrap to the same image)
             leftTile.style.opacity = "1";
             leftTile.style.pointerEvents = "auto";
         }
     }
-    
+
     if (rightTile) {
-        if (nextThumb && rightTargetIndex != null) {
-            if (rightTileImg) {
-                rightTileImg.src = nextThumb;
-            }
+        if (next && rightTargetIndex != null) {
+            assignSideThumb(rightTileImg, next);
             rightTile.style.opacity = "1";
             rightTile.style.pointerEvents = "auto";
         } else {
-            if (rightTileImg) {
-                rightTileImg.src = "";
-                rightTileImg.removeAttribute("src");
-            }
+            assignSideThumb(rightTileImg, null);
             // Keep tiles visible even with one image (they'll wrap to the same image)
             rightTile.style.opacity = "1";
             rightTile.style.pointerEvents = "auto";
@@ -1166,6 +1258,7 @@ export function hideDetails() {
     modalEl.style.backdropFilter = "none";
 
     // wipe the 3 live images (proper cleanup)
+    dismissVideoDetails();
     if (imgEl) unloadImage(imgEl);
     if (leftTileImg) unloadImage(leftTileImg);
     if (rightTileImg) unloadImage(rightTileImg);

@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+import threading
 import urllib.parse
 from typing import Set, Callable, Optional
 
@@ -10,7 +11,22 @@ from PIL import Image
 from aiohttp import web
 from server import PromptServer
 
-from .files import get_output_dir, get_gallery_root_dir, list_output_images, IMAGE_EXTENSIONS
+from .files import (
+    get_output_dir,
+    get_gallery_root_dir,
+    list_output_images,
+    MEDIA_EXTENSIONS,
+    is_video_filename,
+    lookup_stored_tags,
+    merge_video_extensions,
+    resolve_scan_extensions,
+    image_file_ok,
+    thumb_cache_name,
+    thumbnail_needs_regen,
+    video_thumbnail_current,
+    write_thumbnail,
+    write_video_placeholder,
+)
 from folder_paths import get_output_directory
 from .file_monitor import FileMonitor
 from .scanner import BackgroundScanner
@@ -213,7 +229,7 @@ ROUTE_PREFIX = USGROMANA_GALLERY
 _file_monitor: FileMonitor | None = None
 _background_scanner: BackgroundScanner | None = None
 _file_change_callbacks: list[Callable] = []
-_current_extensions: Set[str] = IMAGE_EXTENSIONS.copy()
+_current_extensions: Set[str] = set(MEDIA_EXTENSIONS)
 
 # NSFW check cache to avoid re-checking the same images repeatedly
 # Format: {image_path: (is_nsfw, timestamp)}
@@ -589,6 +605,7 @@ async def gallery_list(request: web.Request) -> web.Response:
 
         base_url = f"{ROUTE_PREFIX}/image"
         payload_images = []
+        stored_meta = _load_meta()
 
         # Build folder summary map
         folders_map: dict[str, dict] = {}
@@ -597,6 +614,8 @@ async def gallery_list(request: web.Request) -> web.Response:
             d = img.to_dict()
             # URL used by frontend to actually load the file
             d["url"] = f"{base_url}?filename={urllib.parse.quote(img.relpath)}"
+            d["thumb_url"] = f"{base_url}?filename={urllib.parse.quote(img.relpath)}&size=thumb"
+            d["tags"] = lookup_stored_tags(stored_meta, img.relpath, img.filename)
             payload_images.append(d)
 
             folder = img.folder or ""
@@ -613,6 +632,9 @@ async def gallery_list(request: web.Request) -> web.Response:
             key=lambda f: (0 if f["path"] == "" else 1, f["path"]),
         )
 
+        _schedule_video_thumbnails(
+            [img.relpath for img in images if is_video_filename(img.filename)]
+        )
         return _json({"ok": True, "images": payload_images, "folders": folder_list})
     except Exception as e:
         # Don't blow up Comfy if something goes wrong
@@ -685,16 +707,7 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
         # CRITICAL FIX: Use relpath hash to prevent same-filename collisions across folders
         # If filename is just a basename, use it directly (backward compatible)
         # If filename is a relpath, create a hash-based name to avoid collisions
-        import hashlib
-        if "/" in filename or "\\" in filename:
-            # It's a relpath - create unique hash-based name
-            # Use first 16 chars of MD5 hash + original extension
-            relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
-            original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
-            thumb_name = f"{relpath_hash}{original_ext}"
-        else:
-            # Just a filename, use it directly (backward compatible for root-level images)
-            thumb_name = os.path.basename(filename)
+        thumb_name = thumb_cache_name(filename)
         thumb_path = os.path.join(thumbs_dir, thumb_name)
 
         # Check NSFW before serving or generating thumbnail
@@ -728,24 +741,25 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
                 traceback.print_exc()
 
         try:
-            # Rebuild thumb if missing or older than source
-            needs_regen = (
-                not os.path.isfile(thumb_path)
-                or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
-            )
+            # Rebuild thumb if missing, older than the source, or still a play icon.
+            needs_regen = thumbnail_needs_regen(safe_path, thumb_path)
 
             if needs_regen:
-                with Image.open(safe_path) as im:
-                    # Reduce thumbnail size for faster loading (256px instead of 512px)
-                    # This significantly reduces file size and generation time
-                    im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                    # Save as PNG regardless of original type
-                    im.save(thumb_path, format="PNG", optimize=True)
+                write_thumbnail(safe_path, thumb_path)
+            if is_video_filename(filename) and not image_file_ok(thumb_path):
+                write_video_placeholder(thumb_path)
 
             return web.FileResponse(path=thumb_path)
         except Exception as e:
-            # Fall back to full image if thumb generation fails
+            # Fall back to full image if thumb generation fails.
+            # Never send a video file back as an <img> thumbnail.
             print("[Usgromana-Gallery] Thumbnail error:", e)
+            if is_video_filename(filename):
+                try:
+                    write_video_placeholder(thumb_path)
+                    return web.FileResponse(path=thumb_path)
+                except Exception:
+                    return _json({"ok": False, "error": "Thumbnail unavailable"}, status=500)
             return web.FileResponse(path=safe_path)
 
     # Default: serve original full-size image
@@ -821,6 +835,10 @@ async def gallery_batch_delete(request: web.Request) -> web.Response:
                             # Use basename as primary (for logging)
                             thumb_name = thumb_name_basename
                         
+                        cached_name = thumb_cache_name(filename)
+                        if cached_name not in thumb_candidates:
+                            thumb_candidates.insert(0, cached_name)
+
                         # Try each candidate until we find the thumbnail
                         thumb_path = None
                         thumb_found = None
@@ -1521,6 +1539,72 @@ async def gallery_log(request: web.Request) -> web.Response:
 
 # --- File monitoring and real-time updates -------------------------
 
+_video_thumb_lock = threading.Lock()
+_video_thumb_running = False
+_video_thumb_pending: set[str] = set()
+
+
+def _ensure_video_thumbnail(relpath: str) -> None:
+    """Write a poster for one video if the cached thumb is missing or stale."""
+    if not relpath or not is_video_filename(relpath):
+        return
+    safe_path = _safe_join_output(relpath)
+    if not safe_path or not os.path.isfile(safe_path):
+        return
+    thumbs_dir = os.path.join(get_gallery_root_dir(), "_thumbs")
+    os.makedirs(thumbs_dir, exist_ok=True)
+    thumb_path = os.path.join(thumbs_dir, thumb_cache_name(relpath))
+    if video_thumbnail_current(safe_path, thumb_path):
+        return
+    try:
+        write_thumbnail(safe_path, thumb_path)
+    except Exception as exc:
+        print(f"[Usgromana-Gallery] Video thumbnail failed for '{relpath}': {exc}")
+    if not image_file_ok(thumb_path):
+        write_video_placeholder(thumb_path)
+
+
+def _schedule_video_thumbnails(relpaths: list[str]) -> None:
+    """Generate missing video posters off the request path, including new files."""
+    global _video_thumb_running
+    needed: list[str] = []
+    for relpath in relpaths:
+        if not relpath or not is_video_filename(relpath):
+            continue
+        safe_path = _safe_join_output(relpath)
+        if not safe_path:
+            continue
+        thumb_path = os.path.join(
+            get_gallery_root_dir(), "_thumbs", thumb_cache_name(relpath)
+        )
+        if not video_thumbnail_current(safe_path, thumb_path):
+            needed.append(relpath)
+    if not needed:
+        return
+    start = False
+    with _video_thumb_lock:
+        _video_thumb_pending.update(needed)
+        if not _video_thumb_running:
+            _video_thumb_running = True
+            start = True
+    if not start:
+        return
+
+    def work():
+        global _video_thumb_running
+        while True:
+            with _video_thumb_lock:
+                batch = list(_video_thumb_pending)
+                _video_thumb_pending.clear()
+                if not batch:
+                    _video_thumb_running = False
+                    return
+            for relpath in batch:
+                _ensure_video_thumbnail(relpath)
+
+    threading.Thread(target=work, name="usg-video-thumbs", daemon=True).start()
+
+
 def _on_file_change(event_type: str, file_path: str):
     """Handle file system change events."""
     try:
@@ -1529,6 +1613,8 @@ def _on_file_change(event_type: str, file_path: str):
             return
         
         relpath = os.path.relpath(file_path, output_dir).replace("\\", "/")
+        if event_type in ("created", "modified") and is_video_filename(relpath):
+            _schedule_video_thumbnails([relpath])
         
         # Notify all registered callbacks
         for callback in _file_change_callbacks:
@@ -1627,19 +1713,15 @@ async def gallery_save_settings(request: web.Request) -> web.Response:
                     print(f"[Usgromana-Gallery] Warning: Failed to purge old thumbnail folder: {e}")
         
         merged = {**existing, **settings}
+        if "fileExtensions" in settings or "fileExtensions" in merged:
+            merged["fileExtensions"] = merge_video_extensions(merged.get("fileExtensions"))
         
         with open(settings_file, "w", encoding="utf-8") as f:
             json.dump(merged, f, indent=2)
         
-        # Update file extensions if changed
-        if "fileExtensions" in settings:
-            extensions = set(settings["fileExtensions"].split(","))
-            extensions = {ext.strip().lower() for ext in extensions if ext.strip()}
-            if extensions:
-                _current_extensions.clear()
-                _current_extensions.update(extensions)
-                if _file_monitor:
-                    _file_monitor.update_extensions(_current_extensions)
+        # Videos stay discoverable even when an older image-only list is saved.
+        if "fileExtensions" in merged:
+            _apply_extension_setting(merged.get("fileExtensions"))
         
         # Update polling mode if changed
         if "usePollingObserver" in settings and _file_monitor:
@@ -1658,6 +1740,8 @@ async def gallery_get_settings(request: web.Request) -> web.Response:
         if os.path.exists(settings_file):
             with open(settings_file, "r", encoding="utf-8") as f:
                 settings = json.load(f) or {}
+                if isinstance(settings, dict):
+                    settings["fileExtensions"] = merge_video_extensions(settings.get("fileExtensions"))
                 return _json({"ok": True, "settings": settings})
         return _json({"ok": True, "settings": {}})
     except Exception as e:
@@ -1680,7 +1764,7 @@ async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Respons
             images = list_output_images(extensions=_current_extensions)
             filenames = [img.relpath for img in images]
         
-        base_output = get_output_dir()
+        base_output = get_gallery_root_dir()
         thumbs_dir = os.path.join(base_output, "_thumbs")
         os.makedirs(thumbs_dir, exist_ok=True)
         
@@ -1698,27 +1782,16 @@ async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Respons
                 if not safe_path:
                     return None
                 
-                # Use same unique naming scheme as main thumbnail endpoint
-                import hashlib
-                if "/" in filename or "\\" in filename:
-                    relpath_hash = hashlib.md5(filename.encode('utf-8')).hexdigest()[:16]
-                    original_ext = os.path.splitext(os.path.basename(filename))[1] or ".png"
-                    thumb_name = f"{relpath_hash}{original_ext}"
-                else:
-                    thumb_name = os.path.basename(filename)
+                thumb_name = thumb_cache_name(filename)
                 thumb_path = os.path.join(thumbs_dir, thumb_name)
                 
                 # Check if regeneration needed
-                needs_regen = (
-                    not os.path.isfile(thumb_path)
-                    or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
-                )
+                needs_regen = thumbnail_needs_regen(safe_path, thumb_path)
                 
                 if needs_regen:
-                    with Image.open(safe_path) as im:
-                        # Use smaller size for faster generation and loading
-                        im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                        im.save(thumb_path, format="PNG", optimize=True)
+                    write_thumbnail(safe_path, thumb_path)
+                    if is_video_filename(filename) and not image_file_ok(thumb_path):
+                        write_video_placeholder(thumb_path)
                     return "generated"
                 else:
                     return "skipped"
@@ -1837,7 +1910,7 @@ async def gallery_list_folder(request: web.Request) -> web.Response:
                         "count": count,
                     })
                 elif os.path.isfile(entry_path):
-                    # Only include image files
+                    # Include image and video files the gallery already discovers
                     _, ext = os.path.splitext(entry)
                     if ext.lower() in _current_extensions:
                         stat = os.stat(entry_path)
@@ -1849,6 +1922,7 @@ async def gallery_list_folder(request: web.Request) -> web.Response:
                             "path": rel_path,
                             "size": stat.st_size,
                             "mtime": stat.st_mtime,
+                            "media_type": "video" if is_video_filename(entry) else "image",
                         })
             except (OSError, PermissionError):
                 # Skip entries we can't access
@@ -2141,16 +2215,12 @@ async def gallery_delete_file(request: web.Request) -> web.Response:
         try:
             output_dir = get_gallery_root_dir()
             thumbs_dir = os.path.join(output_dir, "_thumbs")
-            import hashlib
-            if "/" in path or "\\" in path:
-                relpath_hash = hashlib.md5(path.encode('utf-8')).hexdigest()[:16]
-                original_ext = os.path.splitext(os.path.basename(path))[1] or ".png"
-                thumb_name = f"{relpath_hash}{original_ext}"
-            else:
-                thumb_name = os.path.basename(path)
-            thumb_path = os.path.join(thumbs_dir, thumb_name)
-            if os.path.isfile(thumb_path):
-                os.remove(thumb_path)
+            for thumb_path in (
+                os.path.join(thumbs_dir, thumb_cache_name(path)),
+                os.path.join(thumbs_dir, os.path.basename(path)),
+            ):
+                if os.path.isfile(thumb_path):
+                    os.remove(thumb_path)
         except Exception:
             pass  # Thumbnail deletion is optional
         
@@ -2219,23 +2289,11 @@ async def gallery_move_file(request: web.Request) -> web.Response:
         # Also try to move thumbnail if it exists
         try:
             thumbs_dir = os.path.join(output_dir, "_thumbs")
-            import hashlib
-            if "/" in file_path or "\\" in file_path:
-                relpath_hash = hashlib.md5(file_path.encode('utf-8')).hexdigest()[:16]
-                original_ext = os.path.splitext(os.path.basename(file_path))[1] or ".png"
-                thumb_name = f"{relpath_hash}{original_ext}"
-            else:
-                thumb_name = os.path.basename(file_path)
-            old_thumb_path = os.path.join(thumbs_dir, thumb_name)
+            old_thumb_path = os.path.join(thumbs_dir, thumb_cache_name(file_path))
             
             # Calculate new relpath for thumbnail
             new_relpath = os.path.relpath(target_path, output_dir).replace("\\", "/")
-            if "/" in new_relpath or "\\" in new_relpath:
-                new_relpath_hash = hashlib.md5(new_relpath.encode('utf-8')).hexdigest()[:16]
-                new_thumb_name = f"{new_relpath_hash}{original_ext}"
-            else:
-                new_thumb_name = filename
-            new_thumb_path = os.path.join(thumbs_dir, new_thumb_name)
+            new_thumb_path = os.path.join(thumbs_dir, thumb_cache_name(new_relpath))
             
             if os.path.isfile(old_thumb_path) and not os.path.exists(new_thumb_path):
                 os.rename(old_thumb_path, new_thumb_path)
@@ -2315,6 +2373,29 @@ async def gallery_move_folder(request: web.Request) -> web.Response:
     except Exception as e:
         return _json({"ok": False, "error": str(e)}, status=500)
 
+
+def _apply_extension_setting(raw: str | None) -> None:
+    """Refresh the extensions used by listing and the file watcher."""
+    resolved = resolve_scan_extensions(raw)
+    _current_extensions.clear()
+    _current_extensions.update(resolved)
+    if _file_monitor:
+        _file_monitor.update_extensions(_current_extensions)
+
+
+def _load_extension_setting() -> str | None:
+    settings_file = os.path.join(_DATA_DIR, "settings.json")
+    try:
+        with open(settings_file, "r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        if isinstance(data, dict):
+            return data.get("fileExtensions")
+    except Exception:
+        return None
+    return None
+
+
+_apply_extension_setting(_load_extension_setting())
 
 # Initialize file monitoring when routes are loaded
 _init_file_monitoring()

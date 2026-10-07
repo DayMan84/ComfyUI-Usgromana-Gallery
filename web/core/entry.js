@@ -16,12 +16,19 @@ import { initDragDrop } from "./dragDrop.js";
 import { initThemeSystem } from "./themeManager.js";
 import { startNotificationPolling } from "./notifications.js";
 import { loadAppearance } from "./appearance.js";
+import {
+    applyGalleryButtonScale,
+    applyPinwheelScale,
+    galleryButtonMetrics,
+    galleryButtonVisibility,
+} from "./galleryButton.js";
 
 let initialized = false;
 let loading = false;
 let loadedOnce = false;
 
 let launchBtn = null;
+let toolbarBtn = null;
 let hasCustomPosition = false;
 let resizeHandlerAttached = false;
 let isAnchored = false; 
@@ -45,6 +52,7 @@ async function loadImages(force = false) {
         const images = await galleryApi.listImages();
         // Only reset visibleImages on initial load (force=true) or first load
         setImages(images, force || !loadedOnce);
+        galleryApi.batchGenerateThumbnails().catch(() => {});
         loadedOnce = true;
         logger.info(`[UsgromanaGallery] Loaded ${images.length} gallery images`);
     } catch (err) {
@@ -91,6 +99,8 @@ function startFileWatching() {
                     lastImageCount = images.length;
                     // Don't reset visibleImages - preserve grid's current filter/sort order
                     setImages(images, false);
+                    // New videos need a poster before the card paints.
+                    galleryApi.batchGenerateThumbnails().catch(() => {});
                     // Grid will auto-update via state subscription
                 }
             }
@@ -174,68 +184,103 @@ function usgFindToolbarContainer(settings) {
 // ---------------------------------------------------------
 // Positioning / anchoring
 // ---------------------------------------------------------
-function applyButtonPosition(settings) {
-    if (!launchBtn) return;
+function applyPillMetrics(btn, settings) {
+    applyGalleryButtonScale(btn, settings && settings.galleryButtonScale);
+    applyPinwheelScale(settings && settings.galleryButtonScale);
+}
 
-    const cfg = settings || getGallerySettings();
-    const anchor = cfg?.anchorToManagerBar;
-    const toolbar = usgFindToolbarContainer(cfg);
-
-    if (anchor && toolbar) {
-        // Re-parent into the toolbar, placing after Manager button if it exists
-        if (launchBtn.parentElement !== toolbar) {
-            const managerButton = toolbar.querySelector('button[aria-label="ComfyUI Manager"], button[title="ComfyUI Manager"]');
-            if (managerButton && managerButton.nextSibling) {
-                // Insert after Manager button
-                toolbar.insertBefore(launchBtn, managerButton.nextSibling);
-            } else if (managerButton) {
-                // Manager button exists but has no next sibling, append after it
-                managerButton.parentNode.insertBefore(launchBtn, managerButton.nextSibling);
-            } else {
-                // No Manager button found, just append to group
-                toolbar.appendChild(launchBtn);
-            }
-        }
-
-        // Make it look like a native Comfy button
-        launchBtn.classList.add("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
-
-        Object.assign(launchBtn.style, {
-            position: "relative",
-            top: "0",
-            left: "0",
-            right: "0",
-            bottom: "0",
-            marginLeft: "0px",
-            marginRight: "0",
-            transform: "none",
-            boxShadow: "none",   // flat in the bar
-            // Let Comfy's CSS handle background/border/etc:
-            borderRadius: "",
-            background: "",
-            border: "",
-            padding: "",
-            minWidth: "",
-            minHeight: "",
-            width: "",
+function watchPinwheelScale() {
+    let scheduled = false;
+    const applyNow = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
+    const apply = () => {
+        if (scheduled) return;
+        scheduled = true;
+        queueMicrotask(() => {
+            scheduled = false;
+            applyNow();
+            hookRadialMenuScale();
         });
+    };
+    const scan = () => {
+        let attached = false;
+        const watch = (el, options) => {
+            if (!el || el.dataset.usgScaleWatch === "1") return;
+            el.dataset.usgScaleWatch = "1";
+            new MutationObserver(apply).observe(el, options);
+            attached = true;
+        };
+        document.querySelectorAll(".usgromana-floating-button").forEach((btn) => {
+            watch(btn, {
+                attributes: true,
+                attributeFilter: ["style"],
+                childList: true,
+                subtree: true,
+            });
+        });
+        // refreshButtons rebuilds the fan for a 48px hub. Recompute when it does.
+        document.querySelectorAll(".usgromana-radial-menu").forEach((menu) => {
+            watch(menu, {
+                attributes: true,
+                attributeFilter: ["style", "class"],
+                childList: true,
+                subtree: true,
+            });
+        });
+        hookRadialMenuScale();
+        if (attached) applyNow();
+    };
+    scan();
+    if (typeof MutationObserver === "undefined" || !document.body) return;
+    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+}
 
-        hasCustomPosition = false;
-        isAnchored = true;
-        return;
-    }
+function hookRadialMenuScale() {
+    const menu = window._usgromanaRadialMenu;
+    if (!menu || menu.__usgGalleryScaleHook) return;
+    const run = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
+    const wrap = (name, delayed) => {
+        const orig = menu[name];
+        if (typeof orig !== "function" || orig.__usgGalleryScaleWrap) return;
+        const wrapped = function usgGalleryScaleWrap(...args) {
+            const result = orig.apply(this, args);
+            run();
+            if (delayed) {
+                requestAnimationFrame(run);
+                setTimeout(run, 40);
+                setTimeout(run, 520);
+            }
+            return result;
+        };
+        wrapped.__usgGalleryScaleWrap = true;
+        menu[name] = wrapped;
+    };
+    wrap("refreshButtons", true);
+    wrap("showRadialMenu", true);
+    wrap("updatePosition", false);
+    menu.__usgGalleryScaleHook = true;
+}
 
-    // Floating mode
+function hideFloatingPill() {
+    if (!launchBtn) return;
     if (launchBtn.parentElement !== document.body) {
         document.body.appendChild(launchBtn);
     }
-
-    // When not anchored, remove Comfy classes and restore your pill style
+    launchBtn.style.display = "none";
+    launchBtn.setAttribute("aria-hidden", "true");
     launchBtn.classList.remove("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
+}
 
+function showFloatingPill(settings) {
+    if (!launchBtn) return;
+    if (launchBtn.parentElement !== document.body) {
+        document.body.appendChild(launchBtn);
+    }
+    launchBtn.classList.remove("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
+    launchBtn.style.display = "inline-flex";
+    launchBtn.removeAttribute("aria-hidden");
     launchBtn.style.position = "fixed";
     launchBtn.style.transform = "none";
-
+    applyPillMetrics(launchBtn, settings);
     if (!hasCustomPosition) {
         Object.assign(launchBtn.style, {
             bottom: "16px",
@@ -244,7 +289,72 @@ function applyButtonPosition(settings) {
             left: "auto",
         });
     }
+}
 
+function ensureToolbarButton(toolbar, settings) {
+    if (!toolbarBtn) {
+        const btn = document.createElement("button");
+        btn.id = "usg-gallery-toolbar-btn";
+        btn.type = "button";
+        btn.title = "Gallery";
+        btn.classList.add("comfyui-button", "comfyui-menu-mobile-collapse", "primary");
+        const icon = document.createElement("img");
+        icon.alt = "";
+        icon.style.height = "14px";
+        icon.style.width = "14px";
+        icon.style.objectFit = "contain";
+        const label = document.createElement("span");
+        label.textContent = "Gallery";
+        btn.append(icon, label);
+        btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            showOverlay();
+        });
+        toolbarBtn = btn;
+    }
+    const icon = toolbarBtn.querySelector("img");
+    if (icon) {
+        const theme = (settings || getGallerySettings()).theme;
+        icon.src = theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+    }
+    if (toolbarBtn.parentElement !== toolbar) {
+        const managerButton = toolbar.querySelector('button[aria-label="ComfyUI Manager"], button[title="ComfyUI Manager"]');
+        if (managerButton && managerButton.parentNode) {
+            managerButton.parentNode.insertBefore(toolbarBtn, managerButton.nextSibling);
+        } else {
+            toolbar.appendChild(toolbarBtn);
+        }
+    }
+    toolbarBtn.style.display = "";
+    toolbarBtn.removeAttribute("aria-hidden");
+}
+
+function removeToolbarButton() {
+    if (!toolbarBtn) return;
+    toolbarBtn.remove();
+    toolbarBtn = null;
+}
+
+function applyButtonPosition(settings) {
+    const cfg = settings || getGallerySettings();
+    applyPillMetrics(launchBtn, cfg);
+    const visibility = galleryButtonVisibility(cfg.anchorToManagerBar);
+    const toolbar = usgFindToolbarContainer(cfg);
+
+    document.querySelectorAll("#usg-gallery-launch-btn").forEach((el) => {
+        if (el !== launchBtn) el.remove();
+    });
+
+    if (visibility.showToolbar && toolbar) {
+        hideFloatingPill();
+        ensureToolbarButton(toolbar, cfg);
+        toolbar.querySelectorAll("#usg-gallery-launch-btn").forEach((el) => el.remove());
+        isAnchored = true;
+        return;
+    }
+
+    removeToolbarButton();
+    showFloatingPill(cfg);
     isAnchored = false;
 }
 
@@ -255,25 +365,19 @@ function startAnchorWatch() {
         if (!launchBtn) return;
 
         const cfg = getGallerySettings();
-        const anchor = cfg.anchorToManagerBar;
+        applyPillMetrics(launchBtn, cfg);
+        const visibility = galleryButtonVisibility(cfg.anchorToManagerBar);
         const toolbar = usgFindToolbarContainer(cfg);
 
-        // If anchored, make sure we're inside the toolbar
-        if (anchor && toolbar) {
-            if (!toolbar.contains(launchBtn)) {
-                toolbar.appendChild(launchBtn);
+        if (visibility.showToolbar && toolbar) {
+            if (!toolbarBtn || !toolbar.contains(toolbarBtn) || launchBtn.style.display !== "none") {
                 applyButtonPosition(cfg);
             }
-        } else {
-            // Not anchored → make sure we're back on the body (floating)
-            if (launchBtn.parentElement !== document.body) {
-                document.body.appendChild(launchBtn);
-                applyButtonPosition(cfg);
-            }
+        } else if (!launchBtn || launchBtn.style.display === "none" || launchBtn.parentElement !== document.body) {
+            applyButtonPosition(cfg);
         }
 
-        // Safety: if somehow removed entirely from DOM, re-attach
-        if (!document.body.contains(launchBtn)) {
+        if (launchBtn && !document.body.contains(launchBtn)) {
             document.body.appendChild(launchBtn);
             applyButtonPosition(cfg);
         }
@@ -370,24 +474,25 @@ function createFloatingButton() {
     btn.appendChild(iconImg);
     btn.appendChild(labelSpan);
 
-    // Rectangular comfy-like visual style
+    const metrics = galleryButtonMetrics(1);
+    // Rectangular comfy-like visual style. Scale is applied afterwards so 100% matches this.
     Object.assign(btn.style, {
         zIndex: "9999",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: "6px",
+        gap: `${metrics.gap}px`,
 
-        padding: "6px 10px",
-        minWidth: "110px",
-        minHeight: "28px",
+        padding: `${metrics.padY}px ${metrics.padX}px`,
+        minWidth: `${metrics.minWidth}px`,
+        minHeight: `${metrics.minHeight}px`,
 
-        borderRadius: "6px",
+        borderRadius: `${metrics.radius}px`,
         border: "1px solid rgba(148,163,184,0.55)",
 
         background: "rgba(77, 77, 77, 0.55)",
         color: "#e5e7eb",
-        fontSize: "12px",
+        fontSize: `${metrics.fontSize}px`,
         fontWeight: "500",
         fontFamily:
             "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -398,6 +503,8 @@ function createFloatingButton() {
         WebkitUserSelect: "none",
         backdropFilter: "blur(4px)",
     });
+    iconImg.style.height = `${metrics.icon}px`;
+    iconImg.style.width = `${metrics.icon}px`;
 
     btn.addEventListener("mouseenter", () => {
         if (isAnchored) return;  // no glow when anchored
@@ -426,6 +533,7 @@ function createFloatingButton() {
 
     makeButtonDraggable(btn);
     applyButtonPosition(settings);
+    watchPinwheelScale();
 
     // React to settings changes: theme + anchoring
     const unsubscribeSettings = subscribeGallerySettings((newSettings) => {
