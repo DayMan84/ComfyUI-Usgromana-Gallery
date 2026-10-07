@@ -8,10 +8,12 @@ import { fetchCurrentUser, canEditMetadata } from "../core/user.js";
 import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { formatFileSize, formatDate, unloadImage } from "../core/utils.js";
 import { attachPreviewControls, onPreviewHide, onPreviewImage, onPreviewLayout, registerPreviewHost } from "./previewSocial.js";
+import { mediaKind } from "../core/mediaFilters.js";
 
 let modalEl = null;
 let cardEl = null;
 let imgEl = null;
+let videoEl = null;
 
 let btnMeta = null;
 let btnOpen = null;
@@ -194,6 +196,18 @@ export function initDetails(_rootIgnored) {
         transformOrigin: "center center",
     });
     cardEl.appendChild(imgEl);
+
+    videoEl = document.createElement("video");
+    videoEl.controls = true;
+    videoEl.playsInline = true;
+    Object.assign(videoEl.style, {
+        maxWidth: "85vw",
+        maxHeight: "85vh",
+        borderRadius: "10px",
+        display: "none",
+        background: "#000",
+    });
+    cardEl.appendChild(videoEl);
     
     // Setup zoom and drag event listeners
     setupZoomAndDrag();
@@ -557,6 +571,41 @@ function resizeCardToImage() {
 
 // --------------------------
 // Show / hide
+function sidePreviewThumb(item) {
+    if (!item) return null;
+    const rel = item.relpath || item.filename || "";
+    if (mediaKind(item) === "video" && rel) {
+        return `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
+    }
+    const existing = item.thumb_url || item.url || null;
+    if (existing) return existing;
+    if (!rel) return null;
+    return `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
+}
+
+function presentVideoDetails(url) {
+    if (imgEl) imgEl.style.display = "none";
+    if (!videoEl) return;
+    videoEl.style.display = "block";
+    videoEl.controls = true;
+    if (videoEl.getAttribute("src") !== url) {
+        videoEl.src = url;
+    }
+    const spinner = cardEl && cardEl.querySelector(".details-loading-spinner");
+    if (spinner) spinner.style.display = "none";
+    onPreviewImage();
+}
+
+function dismissVideoDetails() {
+    if (videoEl) {
+        videoEl.pause();
+        videoEl.removeAttribute("src");
+        try { videoEl.load(); } catch (err) { /* element may already be detached */ }
+        videoEl.style.display = "none";
+    }
+    if (imgEl) imgEl.style.display = "block";
+}
+
 // --------------------------
 export async function showDetailsForIndex(index) {
     // CRITICAL: Increment navigation sequence to invalidate any stale concurrent calls
@@ -713,7 +762,16 @@ export async function showDetailsForIndex(index) {
     
     // Reset zoom and drag when switching images
     resetZoomAndDrag();
-    
+
+    const previewIsVideo = mediaKind(imgInfo) === "video";
+    if (previewIsVideo) {
+        presentVideoDetails(newImageUrl);
+        currentImageUrl = newImageUrl;
+    } else {
+        dismissVideoDetails();
+    }
+
+    if (!previewIsVideo) {
     // CRITICAL FIX: Only clear src if there's a potential collision (same filename)
     // This prevents browser from using cached image when navigating between images
     // with the same name but different folder paths, while avoiding unnecessary
@@ -1026,6 +1084,7 @@ export async function showDetailsForIndex(index) {
             }
         }
     }, delayAfterSrcClear); // Delay longer if src was cleared
+    } // still images keep the existing preview path
 
     // PREV/NEXT: thumbnails only, from state registry or existing thumb_url only.
     // Calculate prev/next indices - use filtered images if folder filter is active
@@ -1076,25 +1135,11 @@ export async function showDetailsForIndex(index) {
     let nextThumb = null;
     
     if (prev) {
-        // Try thumb_url first (from backend), then generate from relpath
-        prevThumb = prev.thumb_url || prev.url || null;
-        if (!prevThumb) {
-            const rel = prev.relpath || prev.filename || "";
-            if (rel) {
-                prevThumb = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
-            }
-        }
+        prevThumb = sidePreviewThumb(prev);
     }
     
     if (next) {
-        // Try thumb_url first (from backend), then generate from relpath
-        nextThumb = next.thumb_url || next.url || null;
-        if (!nextThumb) {
-            const rel = next.relpath || next.filename || "";
-            if (rel) {
-                nextThumb = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
-            }
-        }
+        nextThumb = sidePreviewThumb(next);
     }
 
     // Update left/right tiles with proper visibility
@@ -1166,6 +1211,7 @@ export function hideDetails() {
     modalEl.style.backdropFilter = "none";
 
     // wipe the 3 live images (proper cleanup)
+    dismissVideoDetails();
     if (imgEl) unloadImage(imgEl);
     if (leftTileImg) unloadImage(leftTileImg);
     if (rightTileImg) unloadImage(rightTileImg);

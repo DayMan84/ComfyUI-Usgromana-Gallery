@@ -7,12 +7,18 @@ import { getImages, setSelectedIndex } from "../core/state.js";
 import { showDetailsForIndex, setFolderFilter } from "./details.js";
 import { bindImageContextMenu } from "./imageMenu.js";
 import { getCurrentTheme, subscribeTheme } from "../core/themeManager.js";
+import { subscribeGallerySettings } from "../core/gallerySettings.js";
+import { mediaKind } from "../core/mediaFilters.js";
+import { createMediaThumb } from "./mediaThumb.js";
 
 let rootEl = null;
 let currentPath = "";
 let breadcrumbEl = null;
 let fileListEl = null;
 let currentViewMode = "details"; // "details" | "smallIcons" | "mediumIcons" | "largeIcons" | "tiles"
+let lastFolders = [];
+let lastFiles = [];
+let lastVideoThumbMode = null;
 
 // View mode storage key
 const VIEW_MODE_STORAGE_KEY = "usgromana.gallery.explorer.viewMode";
@@ -34,6 +40,17 @@ export function initExplorer(root) {
     loadCurrentPath();
     
     // Subscribe to theme changes to update colors dynamically
+    subscribeGallerySettings((settings) => {
+        const mode = settings.videoThumbnailMode || "hover";
+        if (lastVideoThumbMode === null) {
+            lastVideoThumbMode = mode;
+            return;
+        }
+        if (mode === lastVideoThumbMode || !fileListEl) return;
+        lastVideoThumbMode = mode;
+        renderFileList(lastFolders, lastFiles);
+    });
+
     subscribeTheme(() => {
         if (rootEl) {
             // Rebuild UI to apply new theme colors
@@ -277,6 +294,8 @@ function updateBreadcrumb() {
 
 function renderFileList(folders, files) {
     if (!fileListEl) return;
+    lastFolders = folders || [];
+    lastFiles = files || [];
     const theme = getCurrentTheme();
     fileListEl.innerHTML = "";
 
@@ -557,7 +576,9 @@ function createFileItem(file) {
     
     // Check if file is an image
     const fileName = file.name || file.filename || "";
-    const isImage = /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(fileName);
+    const kind = mediaKind(file);
+    const isImage = kind === "image" && /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(fileName);
+    const isVideo = kind === "video";
     const filePath = file.path || file.filename;
     
     // Different styles based on view mode
@@ -620,9 +641,9 @@ function createFileItem(file) {
     if (currentViewMode === "details") {
         // Details view: use emoji icon
         iconElement = document.createElement("span");
-        iconElement.textContent = "🖼️";
+        iconElement.textContent = isVideo ? "🎬" : "🖼️";
         iconElement.style.fontSize = "16px";
-    } else if (isImage && filePath) {
+    } else if ((isImage || isVideo) && filePath) {
         // Icon/tile views: use thumbnail for images - Windows Explorer style
         // Thumbnail sizes (larger than icons for better preview)
         const thumbSize = currentViewMode === "smallIcons" ? "48px" : 
@@ -643,35 +664,14 @@ function createFileItem(file) {
         iconContainer.style.borderRadius = "2px";
         iconContainer.style.overflow = "hidden";
         
-        // Create thumbnail image
-        const thumbImg = document.createElement("img");
-        const thumbUrl = `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(filePath)}&size=thumb`;
-        thumbImg.src = thumbUrl;
-        thumbImg.alt = fileName;
-        thumbImg.style.objectFit = "cover";
-        thumbImg.style.width = "100%";
-        thumbImg.style.height = "100%";
-        thumbImg.style.display = "block";
-        
-        // Create fallback emoji (hidden by default)
-        const fallback = document.createElement("span");
-        fallback.textContent = "🖼️";
-        fallback.style.fontSize = thumbSize;
-        fallback.style.display = "none";
-        fallback.style.position = "absolute";
-        fallback.style.width = "100%";
-        fallback.style.height = "100%";
-        fallback.style.alignItems = "center";
-        fallback.style.justifyContent = "center";
-        
-        // Handle image load errors
-        thumbImg.onerror = () => {
-            thumbImg.style.display = "none";
-            fallback.style.display = "flex";
-        };
-        
-        iconContainer.appendChild(thumbImg);
-        iconContainer.appendChild(fallback);
+        const thumbEl = createMediaThumb(file, {
+            fit: "cover",
+            lazy: false,
+            alt: fileName,
+        });
+        thumbEl.style.width = "100%";
+        thumbEl.style.height = "100%";
+        iconContainer.appendChild(thumbEl);
         iconElement = iconContainer;
     } else {
         // Non-image file: use emoji icon - Windows Explorer style
@@ -794,7 +794,7 @@ function createFileItem(file) {
         item.style.opacity = "1";
     });
 
-    if (isImage && filePath) {
+    if ((isImage || isVideo) && filePath) {
         bindImageContextMenu(item, {
             relpath: filePath,
             filename: fileName,

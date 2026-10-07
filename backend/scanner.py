@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from typing import List, Callable, Optional
-from .files import list_output_images, IMAGE_EXTENSIONS
+from .files import list_output_images, MEDIA_EXTENSIONS
 
 
 class BackgroundScanner:
@@ -13,7 +13,7 @@ class BackgroundScanner:
     
     def __init__(self, callback: Callable[[List], None], extensions: Optional[set[str]] = None):
         self.callback = callback
-        self.extensions = extensions or IMAGE_EXTENSIONS
+        self.extensions = extensions or MEDIA_EXTENSIONS
         self.scanning = False
         self.thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -38,7 +38,7 @@ class BackgroundScanner:
             if self._stop_event.is_set():
                 return
             
-            images = list_output_images()
+            images = list_output_images(extensions=self.extensions)
             
             if not self._stop_event.is_set():
                 self.callback(images)

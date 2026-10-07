@@ -14,7 +14,11 @@ const queue = [];
 const visible = [];
 
 function galleryButton() {
-    return document.getElementById("usg-gallery-launch-btn");
+    const toolbar = document.getElementById("usg-gallery-toolbar-btn");
+    if (toolbar && toolbar.isConnected && toolbar.style.display !== "none") return toolbar;
+    const pill = document.getElementById("usg-gallery-launch-btn");
+    if (pill && pill.style.display !== "none") return pill;
+    return toolbar || pill;
 }
 
 function direction(rect) {

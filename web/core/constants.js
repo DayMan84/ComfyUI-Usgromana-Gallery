@@ -27,6 +27,8 @@ export const API_ENDPOINTS = {
 
 // Image file extensions
 export const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
+// ComfyUI video outputs shown beside images
+export const VIDEO_EXTENSIONS = [".mp4", ".webm"];
 
 // Thumbnail settings
 export const THUMBNAIL = {

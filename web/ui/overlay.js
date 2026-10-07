@@ -511,6 +511,74 @@ function openSettingsModal(panel) {
         sizeRow.appendChild(sizeSelect);
         form.appendChild(sizeRow);
 
+        // Video thumbnails
+        const videoThumbRow = document.createElement("div");
+        Object.assign(videoThumbRow.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+        });
+        const videoThumbLabel = document.createElement("span");
+        videoThumbLabel.textContent = "Video thumbnails:";
+        const videoThumbSelect = document.createElement("select");
+        [
+            ["hover", "Hover to animate"],
+            ["always", "Always animated"],
+            ["static", "Do not animate"],
+        ].forEach(([value, label]) => {
+            const o = document.createElement("option");
+            o.value = value;
+            o.textContent = label;
+            videoThumbSelect.appendChild(o);
+        });
+        const videoMode = current.videoThumbnailMode;
+        videoThumbSelect.value = videoMode === "always" || videoMode === "static" ? videoMode : "hover";
+        videoThumbSelect.onchange = () => {
+            updateGallerySettings({ videoThumbnailMode: videoThumbSelect.value });
+        };
+        videoThumbRow.appendChild(videoThumbLabel);
+        videoThumbRow.appendChild(videoThumbSelect);
+        form.appendChild(videoThumbRow);
+
+        // Floating Gallery button size. 100% matches the original pill.
+        const buttonScaleRow = document.createElement("div");
+        Object.assign(buttonScaleRow.style, {
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+        });
+        const buttonScaleLabel = document.createElement("span");
+        buttonScaleLabel.textContent = "Gallery button size:";
+        const buttonScaleControls = document.createElement("div");
+        Object.assign(buttonScaleControls.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+        });
+        const buttonScaleInput = document.createElement("input");
+        buttonScaleInput.type = "range";
+        buttonScaleInput.min = "75";
+        buttonScaleInput.max = "250";
+        buttonScaleInput.step = "5";
+        buttonScaleInput.setAttribute("aria-label", "Gallery button size");
+        const initialScale = Number(current.galleryButtonScale);
+        const initialPercent = Number.isFinite(initialScale) ? Math.round(initialScale * 100) : 100;
+        buttonScaleInput.value = String(Math.min(250, Math.max(75, initialPercent)));
+        buttonScaleInput.style.flex = "1";
+        const buttonScaleReadout = document.createElement("span");
+        buttonScaleReadout.textContent = `${buttonScaleInput.value}%`;
+        buttonScaleReadout.style.minWidth = "40px";
+        const commitButtonScale = () => {
+            buttonScaleReadout.textContent = `${buttonScaleInput.value}%`;
+            updateGallerySettings({ galleryButtonScale: Number(buttonScaleInput.value) / 100 });
+        };
+        buttonScaleInput.oninput = commitButtonScale;
+        buttonScaleControls.appendChild(buttonScaleInput);
+        buttonScaleControls.appendChild(buttonScaleReadout);
+        buttonScaleRow.appendChild(buttonScaleLabel);
+        buttonScaleRow.appendChild(buttonScaleControls);
+        form.appendChild(buttonScaleRow);
+
         // File extensions
         const extRow = document.createElement("div");
         Object.assign(extRow.style, {
@@ -523,7 +591,7 @@ function openSettingsModal(panel) {
         extLabel.textContent = "File extensions (comma-separated):";
         const extInput = document.createElement("input");
         extInput.type = "text";
-        extInput.value = current.fileExtensions || ".png,.jpg,.jpeg,.webp,.gif,.bmp";
+        extInput.value = current.fileExtensions || ".png,.jpg,.jpeg,.webp,.gif,.bmp,.mp4,.webm";
         Object.assign(extInput.style, {
             padding: "4px 8px",
             borderRadius: "6px",
