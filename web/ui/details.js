@@ -531,11 +531,13 @@ function navigateRelative(delta) {
     }
 }
 
-function resizeCardToImage() {
-    if (!imgEl || !cardEl) return;
+let previewVideoToken = 0;
 
-    const natW = imgEl.naturalWidth || 512;
-    const natH = imgEl.naturalHeight || 512;
+function resizeCardToSize(natW, natH) {
+    if (!cardEl) return;
+
+    const width = natW > 0 ? natW : 512;
+    const height = natH > 0 ? natH : 512;
 
     // Account for metadata panel if visible
     let maxW = window.innerWidth * 0.8;
@@ -550,16 +552,16 @@ function resizeCardToImage() {
     const paddingW = 10 * 2 + 8 * 2;
     const paddingH = 10 * 2 + 8 * 2;
 
-    const scaleByWidth = (maxW - paddingW) / natW;
-    const scaleByHeight = (maxH - paddingH) / natH;
+    const scaleByWidth = (maxW - paddingW) / width;
+    const scaleByHeight = (maxH - paddingH) / height;
     const scale = Math.min(scaleByWidth, scaleByHeight, 1);
 
-    const imgDisplayW = natW * scale;
-    const imgDisplayH = natH * scale;
+    const displayW = width * scale;
+    const displayH = height * scale;
 
-    cardEl.style.width = `${Math.round(imgDisplayW + paddingW)}px`;
-    cardEl.style.height = `${Math.round(imgDisplayH + paddingH)}px`;
-    
+    cardEl.style.width = `${Math.round(displayW + paddingW)}px`;
+    cardEl.style.height = `${Math.round(displayH + paddingH)}px`;
+
     // Update metadata panel position after card resizes (if metadata is visible)
     if (metadataVisible && metaPanel) {
         // Use a small delay to ensure layout has updated
@@ -567,6 +569,11 @@ function resizeCardToImage() {
             updateMetadataPanelPosition();
         }, 50);
     }
+}
+
+function resizeCardToImage() {
+    if (!imgEl || !cardEl) return;
+    resizeCardToSize(imgEl.naturalWidth, imgEl.naturalHeight);
 }
 
 // --------------------------
@@ -583,25 +590,67 @@ function sidePreviewThumb(item) {
     return `${API_ENDPOINTS.IMAGE}?filename=${encodeURIComponent(rel)}&size=thumb`;
 }
 
+function playPreviewFromStart(video, token) {
+    if (!video || token !== previewVideoToken) return;
+    try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
+    const attempt = video.play();
+    if (!attempt || typeof attempt.then !== "function") return;
+    attempt.then(() => {
+        if (token !== previewVideoToken) video.pause();
+    }).catch(() => {
+        if (token !== previewVideoToken) return;
+        // Autoplay with sound is often blocked. Muted playback still has to start.
+        video.muted = true;
+        video.defaultMuted = true;
+        video.setAttribute("muted", "");
+        try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
+        const retry = video.play();
+        if (retry && typeof retry.then === "function") {
+            retry.then(() => {
+                if (token !== previewVideoToken) video.pause();
+            }).catch(() => {});
+        }
+    });
+}
+
 function presentVideoDetails(url) {
+    const token = ++previewVideoToken;
     if (imgEl) imgEl.style.display = "none";
     if (!videoEl) return;
     videoEl.style.display = "block";
     videoEl.controls = true;
-    if (videoEl.getAttribute("src") !== url) {
-        videoEl.src = url;
+    videoEl.playsInline = true;
+    videoEl.preload = "auto";
+    videoEl.pause();
+    const srcChanged = videoEl.getAttribute("src") !== url;
+    const start = () => {
+        if (token !== previewVideoToken || !videoEl) return;
+        if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+            resizeCardToSize(videoEl.videoWidth, videoEl.videoHeight);
+        }
+        playPreviewFromStart(videoEl, token);
+    };
+    if (srcChanged || videoEl.readyState < 1 || videoEl.videoWidth <= 0) {
+        videoEl.addEventListener("loadedmetadata", start, { once: true });
     }
+    if (srcChanged) videoEl.src = url;
+    else if (videoEl.readyState >= 1 && videoEl.videoWidth > 0) start();
+
     const spinner = cardEl && cardEl.querySelector(".details-loading-spinner");
     if (spinner) spinner.style.display = "none";
     onPreviewImage();
 }
 
 function dismissVideoDetails() {
+    previewVideoToken += 1;
     if (videoEl) {
         videoEl.pause();
         videoEl.removeAttribute("src");
         try { videoEl.load(); } catch (err) { /* element may already be detached */ }
         videoEl.style.display = "none";
+        videoEl.muted = false;
+        videoEl.defaultMuted = false;
+        videoEl.removeAttribute("muted");
     }
     if (imgEl) imgEl.style.display = "block";
 }
