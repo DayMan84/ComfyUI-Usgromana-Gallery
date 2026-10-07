@@ -102,10 +102,9 @@ function ensureGalleryGridStyles() {
         .usg-gallery-grid img,
         .usg-gallery-grid video {
             border-radius: inherit;
-            display: block;
         }
-        .usg-media-thumb video {
-            pointer-events: none;
+        .usg-gallery-grid img {
+            display: block;
         }
         /* CRITICAL PERF FIX: Prevents layout calc for off-screen cards */
         .usg-gallery-card {
