@@ -241,6 +241,42 @@ function createVideoFrame(thumbUrl, mediaUrl, options, className) {
     return { wrap, img };
 }
 
+/**
+ * Poster for a preview side button. Same sources as a grid video cell:
+ * the generated thumb, then a captured frame, then the play-icon fallback.
+ * The caller keeps the button's blur filter on this image.
+ */
+export function attachVideoSidePoster(img, item, stillCurrent) {
+    if (!img) return;
+    const current = () => (typeof stillCurrent !== "function" || stillCurrent()) && img.isConnected;
+    const { mediaUrl, thumbUrl } = mediaUrls(item);
+    const poster = posterSource(thumbUrl);
+    const useFallback = () => {
+        if (!current() || img.dataset.usgFallback === "1") return;
+        img.dataset.usgFallback = "1";
+        img.src = FALLBACK_POSTER;
+    };
+    img.onerror = () => useFallback();
+    img.dataset.usgFrame = "0";
+    img.dataset.usgFallback = "1";
+    img.src = FALLBACK_POSTER;
+    if (poster) {
+        const probe = new Image();
+        probe.onload = () => {
+            if (!current() || img.dataset.usgFrame === "1") return;
+            img.dataset.usgFallback = "0";
+            img.src = poster;
+        };
+        probe.src = poster;
+    }
+    enqueueFrameCapture(mediaUrl, (dataUrl) => {
+        if (!current()) return;
+        img.dataset.usgFrame = "1";
+        img.dataset.usgFallback = "0";
+        img.src = dataUrl;
+    });
+}
+
 function createPlaybackVideo(fit) {
     const video = document.createElement("video");
     silence(video);

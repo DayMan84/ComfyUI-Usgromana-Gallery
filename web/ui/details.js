@@ -9,6 +9,7 @@ import { API_BASE, API_ENDPOINTS, PERFORMANCE } from "../core/constants.js";
 import { formatFileSize, formatDate, unloadImage } from "../core/utils.js";
 import { attachPreviewControls, onPreviewHide, onPreviewImage, onPreviewLayout, registerPreviewHost } from "./previewSocial.js";
 import { mediaKind } from "../core/mediaFilters.js";
+import { attachVideoSidePoster } from "./mediaThumb.js";
 
 let modalEl = null;
 let cardEl = null;
@@ -532,6 +533,25 @@ function navigateRelative(delta) {
 }
 
 let previewVideoToken = 0;
+let sideThumbToken = 0;
+
+function assignSideThumb(img, item) {
+    if (!img) return;
+    const token = ++sideThumbToken;
+    img.dataset.sideToken = String(token);
+    const still = () => img.dataset.sideToken === String(token);
+    if (item && mediaKind(item) === "video") {
+        attachVideoSidePoster(img, item, still);
+        return;
+    }
+    img.onerror = null;
+    const thumb = item ? sidePreviewThumb(item) : "";
+    if (thumb) img.src = thumb;
+    else {
+        img.removeAttribute("src");
+        img.src = "";
+    }
+}
 
 function resizeCardToSize(natW, natH) {
     if (!cardEl) return;
@@ -1178,50 +1198,28 @@ export async function showDetailsForIndex(index) {
     leftTargetIndex = prevIndex >= 0 ? prevIndex : null;
     rightTargetIndex = nextIndex >= 0 ? nextIndex : null;
 
-    // Generate thumbnail URLs directly from image data to ensure correctness
-    // Don't rely on registry which may have stale/incorrect mappings
-    let prevThumb = null;
-    let nextThumb = null;
-    
-    if (prev) {
-        prevThumb = sidePreviewThumb(prev);
-    }
-    
-    if (next) {
-        nextThumb = sidePreviewThumb(next);
-    }
-
-    // Update left/right tiles with proper visibility
+    // Side buttons. Photos keep their thumb. Videos use the generated poster,
+    // blurred by the same filter as the photo thumbs.
     if (leftTile) {
-        if (prevThumb && leftTargetIndex != null) {
-            if (leftTileImg) {
-                leftTileImg.src = prevThumb;
-            }
+        if (prev && leftTargetIndex != null) {
+            assignSideThumb(leftTileImg, prev);
             leftTile.style.opacity = "1";
             leftTile.style.pointerEvents = "auto";
         } else {
-            if (leftTileImg) {
-                leftTileImg.src = "";
-                leftTileImg.removeAttribute("src");
-            }
+            assignSideThumb(leftTileImg, null);
             // Keep tiles visible even with one image (they'll wrap to the same image)
             leftTile.style.opacity = "1";
             leftTile.style.pointerEvents = "auto";
         }
     }
-    
+
     if (rightTile) {
-        if (nextThumb && rightTargetIndex != null) {
-            if (rightTileImg) {
-                rightTileImg.src = nextThumb;
-            }
+        if (next && rightTargetIndex != null) {
+            assignSideThumb(rightTileImg, next);
             rightTile.style.opacity = "1";
             rightTile.style.pointerEvents = "auto";
         } else {
-            if (rightTileImg) {
-                rightTileImg.src = "";
-                rightTileImg.removeAttribute("src");
-            }
+            assignSideThumb(rightTileImg, null);
             // Keep tiles visible even with one image (they'll wrap to the same image)
             rightTile.style.opacity = "1";
             rightTile.style.pointerEvents = "auto";
