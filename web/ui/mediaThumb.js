@@ -7,6 +7,17 @@ import { mediaKind } from "../core/mediaFilters.js";
 
 const LOOP_SECONDS = 2;
 
+// Shown immediately if the generated poster cannot be loaded, so a video cell
+// is never a blank or broken image.
+const FALLBACK_POSTER =
+    "data:image/svg+xml," +
+    encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="144" viewBox="0 0 256 144">' +
+        '<rect width="256" height="144" fill="#1e293b"/>' +
+        '<polygon points="108,52 108,92 156,72" fill="#e2e8f0"/>' +
+        "</svg>"
+    );
+
 export function mediaUrls(item) {
     const rel = (item && (item.relpath || item.path || item.filename || item.name)) || "";
     const encoded = rel ? encodeURIComponent(rel) : "";
@@ -106,28 +117,47 @@ function createImageThumb(thumbUrl, options) {
     return img;
 }
 
-function createStaticVideoThumb(thumbUrl, mediaUrl, options) {
-    const wrap = document.createElement("div");
-    wrap.className = "usg-media-thumb usg-media-thumb-static";
+function videoFrameStyle(wrap, fit) {
     Object.assign(wrap.style, {
         position: "relative",
         width: "100%",
-        height: options.fit === "cover" ? "100%" : "auto",
+        height: fit === "cover" ? "100%" : "auto",
+        minHeight: fit === "cover" ? "100%" : "72px",
+        background: "#1e293b",
+        aspectRatio: fit === "cover" ? "auto" : "16 / 9",
     });
+}
+
+function createPosterImage(thumbUrl, options) {
     const img = document.createElement("img");
     img.alt = options.alt || "";
     img.decoding = "async";
     fitStyle(img, options.fit);
-    const video = document.createElement("video");
-    silence(video);
-    video.preload = "metadata";
-    video.controls = false;
-    video.autoplay = false;
-    video.loop = false;
-    fitStyle(video, options.fit);
-    video.style.display = "none";
-    video.style.pointerEvents = "none";
-    wrap.append(img, video);
+    img.style.minHeight = options.fit === "cover" ? "100%" : "72px";
+    img.dataset.usgPoster = "1";
+    const useFallback = () => {
+        if (img.dataset.usgFallback === "1") return;
+        img.dataset.usgFallback = "1";
+        img.src = FALLBACK_POSTER;
+    };
+    img.onerror = useFallback;
+    img.dataset.usgThumbUrl = thumbUrl || "";
+    return img;
+}
+
+function showPoster(img, thumbUrl) {
+    img.dataset.usgFallback = "0";
+    img.style.display = "block";
+    const next = thumbUrl || FALLBACK_POSTER;
+    if (img.getAttribute("src") !== next) img.src = next;
+}
+
+function createStaticVideoThumb(thumbUrl, mediaUrl, options) {
+    const wrap = document.createElement("div");
+    wrap.className = "usg-media-thumb usg-media-thumb-static";
+    videoFrameStyle(wrap, options.fit);
+    const img = createPosterImage(thumbUrl, options);
+    wrap.appendChild(img);
 
     let settled = false;
     const succeed = () => {
@@ -135,21 +165,9 @@ function createStaticVideoThumb(thumbUrl, mediaUrl, options) {
         settled = true;
         if (options.onLoad) options.onLoad();
     };
-    const fail = () => {
-        if (settled) return;
-        settled = true;
-        if (options.onError) options.onError();
-    };
-    img.onload = succeed;
-    img.onerror = () => {
-        img.style.display = "none";
-        video.style.display = "block";
-        video.src = mediaUrl;
-        video.addEventListener("loadeddata", succeed, { once: true });
-        video.addEventListener("error", fail, { once: true });
-    };
+    img.addEventListener("load", succeed);
     whenVisible(wrap, options.lazy, options.onVisible, () => {
-        img.src = thumbUrl;
+        showPoster(img, thumbUrl);
     });
     return wrap;
 }
@@ -157,24 +175,21 @@ function createStaticVideoThumb(thumbUrl, mediaUrl, options) {
 function createHoverVideo(thumbUrl, mediaUrl, options) {
     const wrap = document.createElement("div");
     wrap.className = "usg-media-thumb usg-media-thumb-hover";
-    Object.assign(wrap.style, {
-        position: "relative",
-        width: "100%",
-        height: options.fit === "cover" ? "100%" : "auto",
-    });
-    const img = document.createElement("img");
-    img.alt = options.alt || "";
-    img.decoding = "async";
-    fitStyle(img, options.fit);
+    videoFrameStyle(wrap, options.fit);
+    const img = createPosterImage(thumbUrl, options);
     const video = document.createElement("video");
     silence(video);
     video.preload = "none";
     video.controls = false;
     video.loop = true;
-    video.poster = thumbUrl;
+    video.poster = thumbUrl || FALLBACK_POSTER;
     fitStyle(video, options.fit);
-    video.style.display = "none";
-    video.style.pointerEvents = "none";
+    Object.assign(video.style, {
+        position: "absolute",
+        inset: "0",
+        display: "none",
+        pointerEvents: "none",
+    });
     wrap.append(img, video);
 
     let settled = false;
@@ -183,40 +198,26 @@ function createHoverVideo(thumbUrl, mediaUrl, options) {
         settled = true;
         if (options.onLoad) options.onLoad();
     };
-    img.onload = succeed;
-    img.onerror = () => {
-        img.style.display = "none";
-        video.style.display = "block";
-        video.preload = "metadata";
-        video.src = mediaUrl;
-        video.addEventListener("loadeddata", () => {
-            video.pause();
-            succeed();
-        }, { once: true });
-        video.addEventListener("error", () => {
-            if (!settled && options.onError) options.onError();
-            settled = true;
-        }, { once: true });
-    };
+    img.addEventListener("load", succeed);
 
     wrap.addEventListener("mouseenter", () => {
         if (videoThumbnailMode() !== "hover") return;
-        img.style.display = "none";
         video.style.display = "block";
         if (!video.src) video.src = mediaUrl;
+        video.addEventListener("playing", () => {
+            img.style.visibility = "hidden";
+        }, { once: true });
         playMuted(video);
     });
     wrap.addEventListener("mouseleave", () => {
         video.pause();
         try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
-        if (img.naturalWidth > 0) {
-            video.style.display = "none";
-            img.style.display = "block";
-        }
+        video.style.display = "none";
+        img.style.visibility = "visible";
     });
 
     whenVisible(wrap, options.lazy, options.onVisible, () => {
-        img.src = thumbUrl;
+        showPoster(img, thumbUrl);
     });
     return wrap;
 }
@@ -224,31 +225,45 @@ function createHoverVideo(thumbUrl, mediaUrl, options) {
 function createAlwaysVideo(thumbUrl, mediaUrl, options) {
     const wrap = document.createElement("div");
     wrap.className = "usg-media-thumb usg-media-thumb-always";
-    Object.assign(wrap.style, {
-        position: "relative",
-        width: "100%",
-        height: options.fit === "cover" ? "100%" : "auto",
-    });
+    videoFrameStyle(wrap, options.fit);
+    const img = createPosterImage(thumbUrl, options);
     const video = document.createElement("video");
     silence(video);
     video.autoplay = true;
     video.loop = false;
     video.controls = false;
     video.preload = "auto";
-    video.poster = thumbUrl;
+    video.poster = thumbUrl || FALLBACK_POSTER;
     video.style.pointerEvents = "none";
     fitStyle(video, options.fit);
+    Object.assign(video.style, {
+        position: "absolute",
+        inset: "0",
+        opacity: "0",
+    });
     bindTwoSecondLoop(video);
-    video.addEventListener("loadeddata", () => {
-        playMuted(video);
+    let settled = false;
+    const succeed = () => {
+        if (settled) return;
+        settled = true;
         if (options.onLoad) options.onLoad();
-    }, { once: true });
+    };
+    img.addEventListener("load", succeed);
+    video.addEventListener("playing", () => {
+        video.style.opacity = "1";
+        succeed();
+    });
     video.addEventListener("error", () => {
-        if (options.onError) options.onError();
-    }, { once: true });
-    wrap.appendChild(video);
+        video.style.display = "none";
+        img.style.visibility = "visible";
+        if (img.dataset.usgFallback !== "1" && !img.complete) showPoster(img, FALLBACK_POSTER);
+        succeed();
+    });
+    wrap.append(img, video);
     whenVisible(wrap, options.lazy, options.onVisible, () => {
+        showPoster(img, thumbUrl);
         video.src = mediaUrl;
+        playMuted(video);
     });
     return wrap;
 }

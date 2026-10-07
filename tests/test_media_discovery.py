@@ -121,3 +121,16 @@ def test_video_placeholder_is_a_png(tmp_path):
     write_video_placeholder(str(dest))
     assert dest.is_file()
     assert dest.read_bytes().startswith(b"\x89PNG")
+
+
+def test_unreadable_video_still_gets_a_png_poster(tmp_path):
+    src = tmp_path / "fresh.mp4"
+    src.write_bytes(b"not a real video")
+    thumb = tmp_path / "fresh.png"
+    write_thumbnail(str(src), str(thumb))
+    assert thumb.is_file()
+    assert thumb.read_bytes().startswith(b"\x89PNG")
+    from backend.files import image_file_ok, video_thumbnail_current
+
+    assert image_file_ok(str(thumb))
+    assert video_thumbnail_current(str(src), str(thumb))

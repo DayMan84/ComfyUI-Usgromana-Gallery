@@ -27,6 +27,69 @@ export function galleryButtonMetrics(scale) {
     };
 }
 
+// Usgromana radial-menu launcher. 48px / 32px is its unscaled size.
+export const PINWHEEL_BASE = { size: 48, icon: 32 };
+
+export function pinwheelMetrics(scale) {
+    const s = clampGalleryButtonScale(scale);
+    return {
+        size: PINWHEEL_BASE.size * s,
+        icon: PINWHEEL_BASE.icon * s,
+    };
+}
+
+function setImportant(el, prop, value) {
+    el.style.setProperty(prop, value, "important");
+}
+
+/** Resize the floating Gallery pill and the pinwheel logo inside it. */
+export function applyGalleryButtonScale(button, scale) {
+    if (!button) return;
+    const metrics = galleryButtonMetrics(scale);
+    setImportant(button, "box-sizing", "content-box");
+    setImportant(button, "padding", `${metrics.padY}px ${metrics.padX}px`);
+    setImportant(button, "min-width", `${metrics.minWidth}px`);
+    setImportant(button, "width", "auto");
+    setImportant(button, "max-width", "none");
+    setImportant(button, "min-height", `${metrics.minHeight}px`);
+    setImportant(button, "height", "auto");
+    setImportant(button, "font-size", `${metrics.fontSize}px`);
+    setImportant(button, "gap", `${metrics.gap}px`);
+    setImportant(button, "border-radius", `${metrics.radius}px`);
+    const iconPx = `${metrics.icon}px`;
+    button.querySelectorAll("img").forEach((icon) => {
+        ["width", "height", "min-width", "min-height", "max-width", "max-height"].forEach((prop) => {
+            setImportant(icon, prop, iconPx);
+        });
+    });
+}
+
+/** Resize the Usgromana pinwheel. Its own stylesheet locks 48px with !important. */
+export function applyPinwheelScale(scale, root) {
+    const scope = root || (typeof document !== "undefined" ? document : null);
+    if (!scope || typeof scope.querySelectorAll !== "function") return;
+    const metrics = pinwheelMetrics(scale);
+    const size = `${metrics.size}px`;
+    const iconPx = `${metrics.icon}px`;
+    scope.querySelectorAll(".usgromana-floating-button").forEach((btn) => {
+        if (btn.dataset.usgScaleLock === "1") return;
+        const icon = btn.querySelector("img, .usgromana-floating-button-icon");
+        const sized = btn.style.getPropertyValue("width") === size
+            && (!icon || icon.style.getPropertyValue("width") === iconPx);
+        if (sized) return;
+        btn.dataset.usgScaleLock = "1";
+        ["width", "height", "min-width", "min-height", "max-width", "max-height"].forEach((prop) => {
+            setImportant(btn, prop, size);
+        });
+        btn.querySelectorAll("img, .usgromana-floating-button-icon").forEach((node) => {
+            ["width", "height", "min-width", "min-height", "max-width", "max-height"].forEach((prop) => {
+                setImportant(node, prop, iconPx);
+            });
+        });
+        btn.dataset.usgScaleLock = "0";
+    });
+}
+
 /** Anchored toolbar control and the floating pill are never shown together. */
 export function galleryButtonVisibility(anchorToManagerBar) {
     const anchored = !!anchorToManagerBar;

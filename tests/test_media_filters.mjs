@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
     galleryButtonMetrics,
     galleryButtonVisibility,
+    pinwheelMetrics,
 } from "../web/core/galleryButton.js";
 import {
     knownTags,
@@ -38,6 +39,10 @@ assert.equal(original.fontSize, 12);
 assert.equal(original.icon, 14);
 assert.equal(galleryButtonMetrics(99).minWidth, 110 * 2.5);
 assert.equal(galleryButtonMetrics(0).minWidth, 110 * 0.75);
+assert.equal(pinwheelMetrics(1).size, 48);
+assert.equal(pinwheelMetrics(1).icon, 32);
+assert.equal(pinwheelMetrics(2).size, 96);
+assert.equal(pinwheelMetrics(2).icon, 64);
 assert.deepEqual(galleryButtonVisibility(false), { showPill: true, showToolbar: false });
 assert.deepEqual(galleryButtonVisibility(true), { showPill: false, showToolbar: true });
 

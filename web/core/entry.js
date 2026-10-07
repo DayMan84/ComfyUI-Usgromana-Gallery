@@ -17,6 +17,8 @@ import { initThemeSystem } from "./themeManager.js";
 import { startNotificationPolling } from "./notifications.js";
 import { loadAppearance } from "./appearance.js";
 import {
+    applyGalleryButtonScale,
+    applyPinwheelScale,
     galleryButtonMetrics,
     galleryButtonVisibility,
 } from "./galleryButton.js";
@@ -50,6 +52,7 @@ async function loadImages(force = false) {
         const images = await galleryApi.listImages();
         // Only reset visibleImages on initial load (force=true) or first load
         setImages(images, force || !loadedOnce);
+        galleryApi.batchGenerateThumbnails().catch(() => {});
         loadedOnce = true;
         logger.info(`[UsgromanaGallery] Loaded ${images.length} gallery images`);
     } catch (err) {
@@ -96,6 +99,8 @@ function startFileWatching() {
                     lastImageCount = images.length;
                     // Don't reset visibleImages - preserve grid's current filter/sort order
                     setImages(images, false);
+                    // New videos need a poster before the card paints.
+                    galleryApi.batchGenerateThumbnails().catch(() => {});
                     // Grid will auto-update via state subscription
                 }
             }
@@ -180,18 +185,29 @@ function usgFindToolbarContainer(settings) {
 // Positioning / anchoring
 // ---------------------------------------------------------
 function applyPillMetrics(btn, settings) {
-    const metrics = galleryButtonMetrics(settings && settings.galleryButtonScale);
-    const icon = btn.querySelector("img");
-    if (icon) {
-        icon.style.height = `${metrics.icon}px`;
-        icon.style.width = `${metrics.icon}px`;
-    }
-    btn.style.padding = `${metrics.padY}px ${metrics.padX}px`;
-    btn.style.minWidth = `${metrics.minWidth}px`;
-    btn.style.minHeight = `${metrics.minHeight}px`;
-    btn.style.fontSize = `${metrics.fontSize}px`;
-    btn.style.gap = `${metrics.gap}px`;
-    btn.style.borderRadius = `${metrics.radius}px`;
+    applyGalleryButtonScale(btn, settings && settings.galleryButtonScale);
+    applyPinwheelScale(settings && settings.galleryButtonScale);
+}
+
+function watchPinwheelScale() {
+    const apply = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
+    const attach = (btn) => {
+        if (!btn || btn.dataset.usgScaleWatch === "1") return;
+        btn.dataset.usgScaleWatch = "1";
+        const observer = new MutationObserver(apply);
+        observer.observe(btn, { attributes: true, attributeFilter: ["style"] });
+        btn.querySelectorAll("img").forEach((icon) => {
+            observer.observe(icon, { attributes: true, attributeFilter: ["style"] });
+        });
+        apply();
+    };
+    const scan = () => {
+        document.querySelectorAll(".usgromana-floating-button").forEach(attach);
+    };
+    scan();
+    if (typeof MutationObserver === "undefined" || !document.body) return;
+    const added = new MutationObserver(scan);
+    added.observe(document.body, { childList: true, subtree: true });
 }
 
 function hideFloatingPill() {
@@ -271,6 +287,7 @@ function removeToolbarButton() {
 
 function applyButtonPosition(settings) {
     const cfg = settings || getGallerySettings();
+    applyPillMetrics(launchBtn, cfg);
     const visibility = galleryButtonVisibility(cfg.anchorToManagerBar);
     const toolbar = usgFindToolbarContainer(cfg);
 
@@ -298,6 +315,7 @@ function startAnchorWatch() {
         if (!launchBtn) return;
 
         const cfg = getGallerySettings();
+        applyPillMetrics(launchBtn, cfg);
         const visibility = galleryButtonVisibility(cfg.anchorToManagerBar);
         const toolbar = usgFindToolbarContainer(cfg);
 
@@ -406,8 +424,8 @@ function createFloatingButton() {
     btn.appendChild(iconImg);
     btn.appendChild(labelSpan);
 
-    const metrics = galleryButtonMetrics(settings.galleryButtonScale);
-    // Rectangular comfy-like visual style. Metrics at scale 1 match the original pill.
+    const metrics = galleryButtonMetrics(1);
+    // Rectangular comfy-like visual style. Scale is applied afterwards so 100% matches this.
     Object.assign(btn.style, {
         zIndex: "9999",
         display: "inline-flex",
@@ -465,6 +483,7 @@ function createFloatingButton() {
 
     makeButtonDraggable(btn);
     applyButtonPosition(settings);
+    watchPinwheelScale();
 
     // React to settings changes: theme + anchoring
     const unsubscribeSettings = subscribeGallerySettings((newSettings) => {

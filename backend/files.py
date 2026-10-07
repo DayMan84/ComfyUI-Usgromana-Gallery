@@ -151,6 +151,38 @@ def thumb_cache_name(filename: str) -> str:
     return base
 
 
+# Drawn play-icon poster. Used when Pillow cannot draw one, so a video thumb
+# is still a real PNG the grid can show.
+_FALLBACK_POSTER_PNG = (
+    b"iVBORw0KGgoAAAANSUhEUgAAAQAAAACQCAIAAABoASLGAAACSElEQVR4nO3cu1UdQRRFQaGlOPCJATmyFS82"
+    b"DoHJkw2Pnv7MropgjLvXaWuenl9ef0DVz9UfACsJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBI"
+    b"EwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBI"
+    b"EwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCaAAT7e31Z/"
+    b"Ag8SwBgf728yONGv1R9wK/8b+P3n79ov4ZMswCUMwikswIUMwv4swAwGYVsCmEcGG/IEms27aCsWYBmDsAM"
+    b"LsJhBWMsC7MIgLCGAvchgMk+gHXkXTWMBtmYQrmYBDmAQrmMBTmIQhhPAeWQwkCfQqbyLhrAAxzMI32EBbs"
+    b"IgPMYC3I1B+BILcDcW4EsEcBPu/jECOJ7T/w4BnMrdDyGA8zj9gQRwEqc/nAAO4O6vI4CtOf2rCWBH7n4a"
+    b"AezF6U8mgF04/SUEsJi7X0sAyzj9HQhgNne/FQHM4/Q3JIAZnP62BHAhd78/AVzC6Z9CACO5++MIYAynf6in"
+    b"55fX1d8Ay/grBGkCIE0ApAmANAGQJgDSBECaAEgTAGkCIE0ApAmANAGQJgDSBECaAEgTAGkCIE0ApAmANAGQ"
+    b"JgDSBECaAEgTAGkCIE0ApAmANAGQJgDSBECaAEgTAGkCIE0ApAmANAGQJgDSBECaAEgTAGkCIE0ApAmANAGQ"
+    b"JgDSBECaAEgTAGkCIO0fo+lhczyTYkwAAAAASUVORK5CYII="
+)
+
+
+def image_file_ok(path: str) -> bool:
+    """True when path is a non-empty image Pillow can open."""
+    if not path or not os.path.isfile(path) or os.path.getsize(path) <= 32:
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            im.load()
+            width, height = im.size
+        return width > 0 and height > 0
+    except Exception:
+        return False
+
+
 def generate_video_poster(src_path: str, dest_path: str) -> bool:
     """Extract one poster frame with ffmpeg. Returns False when that is unavailable."""
     ffmpeg = shutil.which("ffmpeg")
@@ -175,22 +207,36 @@ def generate_video_poster(src_path: str, dest_path: str) -> bool:
             )
         except Exception:
             continue
-        if os.path.isfile(dest_path) and os.path.getsize(dest_path) > 0:
+        if image_file_ok(dest_path):
             return True
+        try:
+            if os.path.isfile(dest_path):
+                os.remove(dest_path)
+        except OSError:
+            pass
     return False
 
 
 def write_video_placeholder(dest_path: str) -> None:
     """Static poster used when a video frame cannot be extracted."""
-    from PIL import Image, ImageDraw
+    import base64
 
     folder = os.path.dirname(dest_path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    image = Image.new("RGB", (256, 144), (30, 41, 59))
-    draw = ImageDraw.Draw(image)
-    draw.polygon([(108, 52), (108, 92), (156, 72)], fill=(226, 232, 240))
-    image.save(dest_path, format="PNG")
+    try:
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGB", (256, 144), (30, 41, 59))
+        draw = ImageDraw.Draw(image)
+        draw.polygon([(108, 52), (108, 92), (156, 72)], fill=(226, 232, 240))
+        image.save(dest_path, format="PNG")
+        if image_file_ok(dest_path):
+            return
+    except Exception:
+        pass
+    with open(dest_path, "wb") as handle:
+        handle.write(base64.b64decode(_FALLBACK_POSTER_PNG))
 
 
 def write_thumbnail(src_path: str, thumb_path: str) -> None:
@@ -198,15 +244,18 @@ def write_thumbnail(src_path: str, thumb_path: str) -> None:
     Write a thumbnail for an image or video.
 
     Images use the existing Pillow resize. Videos prefer an ffmpeg poster and
-    fall back to a static placeholder so the grid never receives the video file
-    as an image thumbnail.
+    always fall back to a real PNG placeholder. The grid never receives the
+    video file as an image thumbnail.
     """
     folder = os.path.dirname(thumb_path)
     if folder:
         os.makedirs(folder, exist_ok=True)
     if is_video_filename(src_path):
-        if generate_video_poster(src_path, thumb_path):
-            return
+        try:
+            if generate_video_poster(src_path, thumb_path) and image_file_ok(thumb_path):
+                return
+        except Exception:
+            pass
         write_video_placeholder(thumb_path)
         return
     from PIL import Image
@@ -214,6 +263,18 @@ def write_thumbnail(src_path: str, thumb_path: str) -> None:
     with Image.open(src_path) as im:
         im.thumbnail((256, 256), Image.Resampling.LANCZOS)
         im.save(thumb_path, format="PNG", optimize=True)
+
+
+def video_thumbnail_current(src_path: str, thumb_path: str) -> bool:
+    """True when a video already has a usable poster newer than the source."""
+    if not is_video_filename(src_path):
+        return False
+    if not os.path.isfile(src_path) or not image_file_ok(thumb_path):
+        return False
+    try:
+        return os.path.getmtime(thumb_path) >= os.path.getmtime(src_path)
+    except OSError:
+        return False
 
 
 def get_output_dir() -> str:

@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+import threading
 import urllib.parse
 from typing import Set, Callable, Optional
 
@@ -19,7 +20,9 @@ from .files import (
     lookup_stored_tags,
     merge_video_extensions,
     resolve_scan_extensions,
+    image_file_ok,
     thumb_cache_name,
+    video_thumbnail_current,
     write_thumbnail,
     write_video_placeholder,
 )
@@ -610,6 +613,7 @@ async def gallery_list(request: web.Request) -> web.Response:
             d = img.to_dict()
             # URL used by frontend to actually load the file
             d["url"] = f"{base_url}?filename={urllib.parse.quote(img.relpath)}"
+            d["thumb_url"] = f"{base_url}?filename={urllib.parse.quote(img.relpath)}&size=thumb"
             d["tags"] = lookup_stored_tags(stored_meta, img.relpath, img.filename)
             payload_images.append(d)
 
@@ -627,6 +631,9 @@ async def gallery_list(request: web.Request) -> web.Response:
             key=lambda f: (0 if f["path"] == "" else 1, f["path"]),
         )
 
+        _schedule_video_thumbnails(
+            [img.relpath for img in images if is_video_filename(img.filename)]
+        )
         return _json({"ok": True, "images": payload_images, "folders": folder_list})
     except Exception as e:
         # Don't blow up Comfy if something goes wrong
@@ -737,10 +744,13 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
             needs_regen = (
                 not os.path.isfile(thumb_path)
                 or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
+                or (is_video_filename(filename) and not image_file_ok(thumb_path))
             )
 
             if needs_regen:
                 write_thumbnail(safe_path, thumb_path)
+            if is_video_filename(filename) and not image_file_ok(thumb_path):
+                write_video_placeholder(thumb_path)
 
             return web.FileResponse(path=thumb_path)
         except Exception as e:
@@ -1532,6 +1542,72 @@ async def gallery_log(request: web.Request) -> web.Response:
 
 # --- File monitoring and real-time updates -------------------------
 
+_video_thumb_lock = threading.Lock()
+_video_thumb_running = False
+_video_thumb_pending: set[str] = set()
+
+
+def _ensure_video_thumbnail(relpath: str) -> None:
+    """Write a poster for one video if the cached thumb is missing or stale."""
+    if not relpath or not is_video_filename(relpath):
+        return
+    safe_path = _safe_join_output(relpath)
+    if not safe_path or not os.path.isfile(safe_path):
+        return
+    thumbs_dir = os.path.join(get_gallery_root_dir(), "_thumbs")
+    os.makedirs(thumbs_dir, exist_ok=True)
+    thumb_path = os.path.join(thumbs_dir, thumb_cache_name(relpath))
+    if video_thumbnail_current(safe_path, thumb_path):
+        return
+    try:
+        write_thumbnail(safe_path, thumb_path)
+    except Exception as exc:
+        print(f"[Usgromana-Gallery] Video thumbnail failed for '{relpath}': {exc}")
+    if not image_file_ok(thumb_path):
+        write_video_placeholder(thumb_path)
+
+
+def _schedule_video_thumbnails(relpaths: list[str]) -> None:
+    """Generate missing video posters off the request path, including new files."""
+    global _video_thumb_running
+    needed: list[str] = []
+    for relpath in relpaths:
+        if not relpath or not is_video_filename(relpath):
+            continue
+        safe_path = _safe_join_output(relpath)
+        if not safe_path:
+            continue
+        thumb_path = os.path.join(
+            get_gallery_root_dir(), "_thumbs", thumb_cache_name(relpath)
+        )
+        if not video_thumbnail_current(safe_path, thumb_path):
+            needed.append(relpath)
+    if not needed:
+        return
+    start = False
+    with _video_thumb_lock:
+        _video_thumb_pending.update(needed)
+        if not _video_thumb_running:
+            _video_thumb_running = True
+            start = True
+    if not start:
+        return
+
+    def work():
+        global _video_thumb_running
+        while True:
+            with _video_thumb_lock:
+                batch = list(_video_thumb_pending)
+                _video_thumb_pending.clear()
+                if not batch:
+                    _video_thumb_running = False
+                    return
+            for relpath in batch:
+                _ensure_video_thumbnail(relpath)
+
+    threading.Thread(target=work, name="usg-video-thumbs", daemon=True).start()
+
+
 def _on_file_change(event_type: str, file_path: str):
     """Handle file system change events."""
     try:
@@ -1540,6 +1616,8 @@ def _on_file_change(event_type: str, file_path: str):
             return
         
         relpath = os.path.relpath(file_path, output_dir).replace("\\", "/")
+        if event_type in ("created", "modified") and is_video_filename(relpath):
+            _schedule_video_thumbnails([relpath])
         
         # Notify all registered callbacks
         for callback in _file_change_callbacks:
@@ -1689,7 +1767,7 @@ async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Respons
             images = list_output_images(extensions=_current_extensions)
             filenames = [img.relpath for img in images]
         
-        base_output = get_output_dir()
+        base_output = get_gallery_root_dir()
         thumbs_dir = os.path.join(base_output, "_thumbs")
         os.makedirs(thumbs_dir, exist_ok=True)
         
@@ -1714,10 +1792,13 @@ async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Respons
                 needs_regen = (
                     not os.path.isfile(thumb_path)
                     or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
+                    or (is_video_filename(filename) and not image_file_ok(thumb_path))
                 )
                 
                 if needs_regen:
                     write_thumbnail(safe_path, thumb_path)
+                    if is_video_filename(filename) and not image_file_ok(thumb_path):
+                        write_video_placeholder(thumb_path)
                     return "generated"
                 else:
                     return "skipped"
