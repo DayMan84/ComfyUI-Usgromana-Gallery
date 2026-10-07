@@ -190,24 +190,74 @@ function applyPillMetrics(btn, settings) {
 }
 
 function watchPinwheelScale() {
-    const apply = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
-    const attach = (btn) => {
-        if (!btn || btn.dataset.usgScaleWatch === "1") return;
-        btn.dataset.usgScaleWatch = "1";
-        const observer = new MutationObserver(apply);
-        observer.observe(btn, { attributes: true, attributeFilter: ["style"] });
-        btn.querySelectorAll("img").forEach((icon) => {
-            observer.observe(icon, { attributes: true, attributeFilter: ["style"] });
+    let scheduled = false;
+    const applyNow = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
+    const apply = () => {
+        if (scheduled) return;
+        scheduled = true;
+        queueMicrotask(() => {
+            scheduled = false;
+            applyNow();
+            hookRadialMenuScale();
         });
-        apply();
     };
     const scan = () => {
-        document.querySelectorAll(".usgromana-floating-button").forEach(attach);
+        let attached = false;
+        const watch = (el, options) => {
+            if (!el || el.dataset.usgScaleWatch === "1") return;
+            el.dataset.usgScaleWatch = "1";
+            new MutationObserver(apply).observe(el, options);
+            attached = true;
+        };
+        document.querySelectorAll(".usgromana-floating-button").forEach((btn) => {
+            watch(btn, {
+                attributes: true,
+                attributeFilter: ["style"],
+                childList: true,
+                subtree: true,
+            });
+        });
+        // refreshButtons rebuilds the fan for a 48px hub. Recompute when it does.
+        document.querySelectorAll(".usgromana-radial-menu").forEach((menu) => {
+            watch(menu, {
+                attributes: true,
+                attributeFilter: ["style", "class"],
+                childList: true,
+                subtree: true,
+            });
+        });
+        hookRadialMenuScale();
+        if (attached) applyNow();
     };
     scan();
     if (typeof MutationObserver === "undefined" || !document.body) return;
-    const added = new MutationObserver(scan);
-    added.observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+}
+
+function hookRadialMenuScale() {
+    const menu = window._usgromanaRadialMenu;
+    if (!menu || menu.__usgGalleryScaleHook) return;
+    const run = () => applyPinwheelScale(getGallerySettings().galleryButtonScale);
+    const wrap = (name, delayed) => {
+        const orig = menu[name];
+        if (typeof orig !== "function" || orig.__usgGalleryScaleWrap) return;
+        const wrapped = function usgGalleryScaleWrap(...args) {
+            const result = orig.apply(this, args);
+            run();
+            if (delayed) {
+                requestAnimationFrame(run);
+                setTimeout(run, 40);
+                setTimeout(run, 520);
+            }
+            return result;
+        };
+        wrapped.__usgGalleryScaleWrap = true;
+        menu[name] = wrapped;
+    };
+    wrap("refreshButtons", true);
+    wrap("showRadialMenu", true);
+    wrap("updatePosition", false);
+    menu.__usgGalleryScaleHook = true;
 }
 
 function hideFloatingPill() {
