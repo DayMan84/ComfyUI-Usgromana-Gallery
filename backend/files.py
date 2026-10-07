@@ -193,8 +193,9 @@ def generate_video_poster(src_path: str, dest_path: str) -> bool:
         os.makedirs(folder, exist_ok=True)
     scale = "scale=256:256:force_original_aspect_ratio=decrease"
     commands = [
-        [ffmpeg, "-y", "-ss", "0.25", "-i", src_path, "-frames:v", "1", "-vf", scale, dest_path],
-        [ffmpeg, "-y", "-i", src_path, "-frames:v", "1", "-vf", scale, dest_path],
+        [ffmpeg, "-y", "-ss", "0.1", "-i", src_path, "-an", "-frames:v", "1", "-vf", scale, dest_path],
+        [ffmpeg, "-y", "-i", src_path, "-an", "-frames:v", "1", "-vf", scale, dest_path],
+        [ffmpeg, "-y", "-i", src_path, "-an", "-frames:v", "1", dest_path],
     ]
     for cmd in commands:
         try:
@@ -207,7 +208,7 @@ def generate_video_poster(src_path: str, dest_path: str) -> bool:
             )
         except Exception:
             continue
-        if image_file_ok(dest_path):
+        if image_file_ok(dest_path) and not is_play_icon_placeholder(dest_path):
             return True
         try:
             if os.path.isfile(dest_path):
@@ -253,10 +254,19 @@ def write_thumbnail(src_path: str, thumb_path: str) -> None:
     if is_video_filename(src_path):
         try:
             if generate_video_poster(src_path, thumb_path) and image_file_ok(thumb_path):
+                try:
+                    os.remove(thumb_path + ".attempt")
+                except OSError:
+                    pass
                 return
         except Exception:
             pass
         write_video_placeholder(thumb_path)
+        try:
+            with open(thumb_path + ".attempt", "w", encoding="utf-8") as handle:
+                handle.write(_poster_attempt_stamp(src_path))
+        except OSError:
+            pass
         return
     from PIL import Image
 
@@ -265,16 +275,64 @@ def write_thumbnail(src_path: str, thumb_path: str) -> None:
         im.save(thumb_path, format="PNG", optimize=True)
 
 
+def is_play_icon_placeholder(path: str) -> bool:
+    """True for the drawn play-icon poster, not an extracted video frame."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            if im.size != (256, 144):
+                return False
+            rgb = im.convert("RGB")
+            return rgb.getpixel((8, 8)) == (30, 41, 59) and rgb.getpixel((130, 72)) == (226, 232, 240)
+    except Exception:
+        return False
+
+
+def _poster_attempt_stamp(src_path: str) -> str:
+    try:
+        return str(os.path.getmtime(src_path))
+    except OSError:
+        return ""
+
+
+def thumbnail_needs_regen(src_path: str, thumb_path: str) -> bool:
+    """True when the cached thumb is missing, stale, or only a play-icon."""
+    if is_video_filename(src_path):
+        return not video_thumbnail_current(src_path, thumb_path)
+    if not os.path.isfile(src_path) or not os.path.isfile(thumb_path):
+        return True
+    try:
+        return os.path.getmtime(thumb_path) < os.path.getmtime(src_path)
+    except OSError:
+        return True
+
+
 def video_thumbnail_current(src_path: str, thumb_path: str) -> bool:
-    """True when a video already has a usable poster newer than the source."""
+    """True when a video already has a real poster newer than the source.
+
+    A play-icon placeholder is not a finished poster. Extraction is tried once
+    per source mtime so a missing ffmpeg does not run on every gallery refresh.
+    """
     if not is_video_filename(src_path):
         return False
     if not os.path.isfile(src_path) or not image_file_ok(thumb_path):
         return False
     try:
-        return os.path.getmtime(thumb_path) >= os.path.getmtime(src_path)
+        fresh = os.path.getmtime(thumb_path) >= os.path.getmtime(src_path)
     except OSError:
         return False
+    if not fresh:
+        return False
+    if not is_play_icon_placeholder(thumb_path):
+        return True
+    attempt_path = thumb_path + ".attempt"
+    try:
+        with open(attempt_path, "r", encoding="utf-8") as handle:
+            tried = handle.read().strip()
+    except OSError:
+        tried = ""
+    return tried == _poster_attempt_stamp(src_path)
 
 
 def get_output_dir() -> str:

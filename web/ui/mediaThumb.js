@@ -117,82 +117,102 @@ function createImageThumb(thumbUrl, options) {
     return img;
 }
 
-function ensureVideoFrameStyles() {
-    if (document.getElementById("usg-video-frame-style")) return;
-    const style = document.createElement("style");
-    style.id = "usg-video-frame-style";
-    style.textContent = `
-        .usg-video-frame {
-            position: relative;
-            width: 100%;
-            aspect-ratio: 16 / 9;
-            overflow: hidden;
-            background: #1e293b center / contain no-repeat;
-        }
-        .usg-video-frame.is-cover {
-            height: 100%;
-            aspect-ratio: auto;
-        }
-        .usg-video-frame .usg-video-poster {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            display: block;
-            background: transparent;
-        }
-        .usg-video-frame.is-cover .usg-video-poster,
-        .usg-video-frame.is-cover video {
-            object-fit: cover;
-        }
-        .usg-video-frame video {
-            display: none !important;
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            pointer-events: none;
-            background: #000;
-        }
-        .usg-video-frame.is-playing video {
-            display: block !important;
-        }
-        .usg-video-frame.is-playing .usg-video-poster {
-            visibility: hidden;
-        }
-    `;
-    document.head.appendChild(style);
-}
-
 function posterSource(thumbUrl) {
-    if (!thumbUrl) return FALLBACK_POSTER;
+    if (!thumbUrl) return "";
     if (thumbUrl.startsWith("data:")) return thumbUrl;
     if (/[?&]size=thumb(?:&|$)/.test(thumbUrl)) return thumbUrl;
     return `${thumbUrl}${thumbUrl.includes("?") ? "&" : "?"}size=thumb`;
 }
 
-function createVideoFrame(thumbUrl, options, className) {
-    ensureVideoFrameStyles();
+const frameCaptureQueue = [];
+let frameCapturesActive = 0;
+
+function captureVideoFrame(mediaUrl) {
+    return new Promise((resolve, reject) => {
+        const video = document.createElement("video");
+        silence(video);
+        video.preload = "auto";
+        video.src = mediaUrl;
+        let settled = false;
+        const finish = (err, url) => {
+            if (settled) return;
+            settled = true;
+            video.pause();
+            video.removeAttribute("src");
+            try { video.load(); } catch (loadErr) { /* already detached */ }
+            if (err) reject(err);
+            else resolve(url);
+        };
+        video.addEventListener("error", () => finish(new Error("frame")), { once: true });
+        const draw = () => {
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            if (!width || !height) {
+                finish(new Error("frame"));
+                return;
+            }
+            const scale = Math.min(1, 512 / Math.max(width, height));
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.round(width * scale));
+            canvas.height = Math.max(1, Math.round(height * scale));
+            const context = canvas.getContext("2d");
+            if (!context) {
+                finish(new Error("frame"));
+                return;
+            }
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            try {
+                finish(null, canvas.toDataURL("image/jpeg", 0.86));
+            } catch (err) {
+                finish(err);
+            }
+        };
+        video.addEventListener("loadeddata", () => {
+            const duration = video.duration;
+            const target = Number.isFinite(duration) && duration > 0 ? Math.min(0.2, duration * 0.1) : 0;
+            if (target > 0.01) {
+                video.addEventListener("seeked", draw, { once: true });
+                try {
+                    video.currentTime = target;
+                } catch (err) {
+                    draw();
+                }
+            } else {
+                draw();
+            }
+        }, { once: true });
+    });
+}
+
+function enqueueFrameCapture(mediaUrl, onFrame) {
+    if (!mediaUrl) return;
+    frameCaptureQueue.push({ mediaUrl, onFrame });
+    const pump = () => {
+        while (frameCapturesActive < 2 && frameCaptureQueue.length) {
+            const job = frameCaptureQueue.shift();
+            frameCapturesActive += 1;
+            captureVideoFrame(job.mediaUrl).then(job.onFrame).catch(() => {}).finally(() => {
+                frameCapturesActive -= 1;
+                pump();
+            });
+        }
+    };
+    pump();
+}
+
+function createVideoFrame(thumbUrl, mediaUrl, options, className) {
     const wrap = document.createElement("div");
     wrap.className = `usg-media-thumb usg-video-frame ${className}`;
-    if (options.fit === "cover") wrap.classList.add("is-cover");
-    wrap.style.backgroundImage = `url("${FALLBACK_POSTER}")`;
+    wrap.style.width = "100%";
+    if (options.fit === "cover") {
+        wrap.style.height = "100%";
+    }
 
     const img = document.createElement("img");
     img.className = "usg-video-poster";
     img.alt = options.alt || "";
     img.decoding = "async";
-    img.dataset.usgPoster = "1";
-    const poster = posterSource(thumbUrl);
-    img.addEventListener("error", () => {
-        if (img.dataset.usgFallback === "1") return;
-        img.dataset.usgFallback = "1";
-        img.src = FALLBACK_POSTER;
-    });
+    fitStyle(img, options.fit);
     let reported = false;
     const reportLoad = () => {
         if (reported) return;
@@ -200,34 +220,57 @@ function createVideoFrame(thumbUrl, options, className) {
         if (options.onLoad) options.onLoad();
     };
     img.addEventListener("load", reportLoad);
+    img.addEventListener("error", () => {
+        if (img.dataset.usgFrame === "1" || img.dataset.usgFallback === "1") return;
+        img.dataset.usgFallback = "1";
+        img.src = FALLBACK_POSTER;
+    });
     wrap.appendChild(img);
     if (options.onVisible) options.onVisible();
-    img.src = poster;
-    return { wrap, img, poster };
+
+    const serverPoster = posterSource(thumbUrl);
+    if (serverPoster) img.src = serverPoster;
+    else img.src = FALLBACK_POSTER;
+
+    enqueueFrameCapture(mediaUrl, (dataUrl) => {
+        if (!img.isConnected) return;
+        img.dataset.usgFrame = "1";
+        img.dataset.usgFallback = "0";
+        img.src = dataUrl;
+    });
+    return { wrap, img };
 }
 
-function createPlaybackVideo(poster) {
+function createPlaybackVideo(fit) {
     const video = document.createElement("video");
     silence(video);
     video.preload = "none";
     video.controls = false;
-    video.poster = poster;
-    video.setAttribute("poster", poster);
+    video.playsInline = true;
+    fitStyle(video, fit);
+    video.style.display = "none";
+    video.style.pointerEvents = "none";
     return video;
 }
 
-function markPlaying(wrap, playing) {
-    wrap.classList.toggle("is-playing", !!playing);
+function showStill(img, video) {
+    img.style.display = "block";
+    if (video) video.style.display = "none";
 }
 
-function createStaticVideoThumb(thumbUrl, _mediaUrl, options) {
-    const { wrap } = createVideoFrame(thumbUrl, options, "usg-media-thumb-static");
+function showPlayback(img, video) {
+    video.style.display = "block";
+    img.style.display = "none";
+}
+
+function createStaticVideoThumb(thumbUrl, mediaUrl, options) {
+    const { wrap } = createVideoFrame(thumbUrl, mediaUrl, options, "usg-media-thumb-static");
     return wrap;
 }
 
 function createHoverVideo(thumbUrl, mediaUrl, options) {
-    const { wrap, poster } = createVideoFrame(thumbUrl, options, "usg-media-thumb-hover");
-    const video = createPlaybackVideo(poster);
+    const { wrap, img } = createVideoFrame(thumbUrl, mediaUrl, options, "usg-media-thumb-hover");
+    const video = createPlaybackVideo(options.fit);
     video.loop = true;
     wrap.appendChild(video);
 
@@ -242,27 +285,27 @@ function createHoverVideo(thumbUrl, mediaUrl, options) {
         hovering = false;
         video.pause();
         try { video.currentTime = 0; } catch (err) { /* not seekable yet */ }
-        markPlaying(wrap, false);
+        showStill(img, video);
     });
     video.addEventListener("playing", () => {
-        if (hovering) markPlaying(wrap, true);
+        if (hovering) showPlayback(img, video);
     });
-    video.addEventListener("pause", () => markPlaying(wrap, false));
-    video.addEventListener("error", () => markPlaying(wrap, false));
+    video.addEventListener("pause", () => showStill(img, video));
+    video.addEventListener("error", () => showStill(img, video));
     return wrap;
 }
 
 function createAlwaysVideo(thumbUrl, mediaUrl, options) {
-    const { wrap, poster } = createVideoFrame(thumbUrl, options, "usg-media-thumb-always");
-    const video = createPlaybackVideo(poster);
+    const { wrap, img } = createVideoFrame(thumbUrl, mediaUrl, options, "usg-media-thumb-always");
+    const video = createPlaybackVideo(options.fit);
     video.autoplay = true;
     video.preload = "auto";
     video.loop = false;
     bindTwoSecondLoop(video);
-    video.addEventListener("playing", () => markPlaying(wrap, true));
-    video.addEventListener("pause", () => markPlaying(wrap, false));
-    video.addEventListener("ended", () => markPlaying(wrap, false));
-    video.addEventListener("error", () => markPlaying(wrap, false));
+    video.addEventListener("playing", () => showPlayback(img, video));
+    video.addEventListener("pause", () => showStill(img, video));
+    video.addEventListener("ended", () => showStill(img, video));
+    video.addEventListener("error", () => showStill(img, video));
     wrap.appendChild(video);
     video.src = mediaUrl;
     playMuted(video);

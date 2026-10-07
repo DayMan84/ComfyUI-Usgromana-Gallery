@@ -22,6 +22,7 @@ from .files import (
     resolve_scan_extensions,
     image_file_ok,
     thumb_cache_name,
+    thumbnail_needs_regen,
     video_thumbnail_current,
     write_thumbnail,
     write_video_placeholder,
@@ -740,12 +741,8 @@ async def gallery_image(request: web.Request) -> web.StreamResponse:
                 traceback.print_exc()
 
         try:
-            # Rebuild thumb if missing or older than source
-            needs_regen = (
-                not os.path.isfile(thumb_path)
-                or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
-                or (is_video_filename(filename) and not image_file_ok(thumb_path))
-            )
+            # Rebuild thumb if missing, older than the source, or still a play icon.
+            needs_regen = thumbnail_needs_regen(safe_path, thumb_path)
 
             if needs_regen:
                 write_thumbnail(safe_path, thumb_path)
@@ -1789,11 +1786,7 @@ async def gallery_batch_generate_thumbnails(request: web.Request) -> web.Respons
                 thumb_path = os.path.join(thumbs_dir, thumb_name)
                 
                 # Check if regeneration needed
-                needs_regen = (
-                    not os.path.isfile(thumb_path)
-                    or os.path.getmtime(thumb_path) < os.path.getmtime(safe_path)
-                    or (is_video_filename(filename) and not image_file_ok(thumb_path))
-                )
+                needs_regen = thumbnail_needs_regen(safe_path, thumb_path)
                 
                 if needs_regen:
                     write_thumbnail(safe_path, thumb_path)

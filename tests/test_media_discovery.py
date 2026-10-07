@@ -15,11 +15,14 @@ if "folder_paths" not in sys.modules:
 
 from backend.files import (  # noqa: E402
     generate_video_poster,
+    is_play_icon_placeholder,
     list_output_images,
     lookup_stored_tags,
     merge_video_extensions,
     resolve_scan_extensions,
     thumb_cache_name,
+    thumbnail_needs_regen,
+    video_thumbnail_current,
     write_thumbnail,
     write_video_placeholder,
 )
@@ -121,6 +124,19 @@ def test_video_placeholder_is_a_png(tmp_path):
     write_video_placeholder(str(dest))
     assert dest.is_file()
     assert dest.read_bytes().startswith(b"\x89PNG")
+
+
+def test_play_icon_placeholder_is_regenerated_once(tmp_path):
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"not a real video")
+    thumb = tmp_path / "clip.png"
+    write_video_placeholder(str(thumb))
+    assert is_play_icon_placeholder(str(thumb))
+    assert video_thumbnail_current(str(src), str(thumb)) is False
+    assert thumbnail_needs_regen(str(src), str(thumb)) is True
+    write_thumbnail(str(src), str(thumb))
+    assert is_play_icon_placeholder(str(thumb))
+    assert video_thumbnail_current(str(src), str(thumb)) is True
 
 
 def test_unreadable_video_still_gets_a_png_poster(tmp_path):
