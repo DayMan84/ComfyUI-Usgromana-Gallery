@@ -1,12 +1,8 @@
 <p align="center">
-  <img src="./web/assets/Dark_Usgromana-Gallery.png" width="180" alt="Usgromana Gallery logo" />
+  <img src="./README/banner.png" width="880" alt="Usgromana Gallery banner" />
 </p>
 
 <h1 align="center">ComfyUI-Usgromana-Gallery</h1>
-
-<p align="center">
-  <img src="./README/banner.png" width="880" alt="Usgromana Gallery banner" />
-</p>
 
 <p align="center">
   A gallery window for the images and videos ComfyUI writes, for people who browse, arrange, annotate, and send that media back into a workflow.
@@ -17,8 +13,24 @@
   <a href="https://github.com/DayMan84/ComfyUI-Usgromana-Gallery"><img alt="GitHub license: not specified" src="https://img.shields.io/github/license/DayMan84/ComfyUI-Usgromana-Gallery?label=license" /></a>
   <a href="https://github.com/DayMan84/ComfyUI-Usgromana-Gallery/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/DayMan84/ComfyUI-Usgromana-Gallery" /></a>
 </p>
-
+<p align="center">
 The extension sits over ComfyUI, reads the output folder, and keeps ratings, tags, comments, and shares beside the files. It does not add workflow nodes. Open it from the **Gallery** button.
+</p>
+
+## Contents
+
+- [Grid and explorer](#grid-and-explorer)
+- [Preview](#preview)
+- [Filters, themes, and the button](#filters-themes-and-the-button)
+- [Sharing and notices](#sharing-and-notices)
+- [Videos](#videos)
+- [In motion](#in-motion)
+- [Metrics](#metrics)
+- [Install](#install)
+- [Data](#data)
+- [Shortcuts](#shortcuts)
+- [If something looks wrong](#if-something-looks-wrong)
+- [Disclaimer](#disclaimer)
 
 ## Grid and explorer
 
@@ -185,21 +197,6 @@ These are the gallery UI, with fixture photos and videos behind it.
 </p>
 
 The pinwheel fan is not in these clips. This plugin resizes Usgromana’s radial menu when that menu is already on the page. It does not draw the fan itself.
-
-## Contents
-
-- [Grid and explorer](#grid-and-explorer)
-- [Preview](#preview)
-- [Filters, themes, and the button](#filters-themes-and-the-button)
-- [Sharing and notices](#sharing-and-notices)
-- [Videos](#videos)
-- [In motion](#in-motion)
-- [Metrics](#metrics)
-- [Install](#install)
-- [Data](#data)
-- [Shortcuts](#shortcuts)
-- [If something looks wrong](#if-something-looks-wrong)
-- [Disclaimer](#disclaimer)
 
 ## Metrics
 
