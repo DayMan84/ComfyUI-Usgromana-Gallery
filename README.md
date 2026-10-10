@@ -156,14 +156,35 @@ Still-image thumbnails are PNGs from Pillow, also fitted within 256px, in the sa
 
 ## In motion
 
-Clips of the gallery in motion are not in this repository. They were not recorded from a running ComfyUI session, so this page does not stand in with generated footage. The behaviors with no clip here are:
+These are the gallery UI, with fixture photos and videos behind it.
 
-- Hover playback on a video thumbnail, and the return to the poster
-- The 2-second thumbnail loop (**Always animated**)
-- **Show** and tag filters changing the grid
-- Large-preview autoplay, and the card resizing to the video
-- Blurred video posters on the preview side buttons
-- The floating Gallery pill, and the pinwheel hub and fan, at sizes from 75% to 250%
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="./README/motion/video-thumb-hover.gif" alt="Video thumbnail poster, hover playback, then the poster again" />
+      <br />
+      <sub>Hover plays the wide video in its cell. Leaving the cell returns the poster.</sub>
+    </td>
+    <td width="33%" valign="top">
+      <img src="./README/motion/filters.gif" alt="Media filter and tag filter changing the grid" />
+      <br />
+      <sub>Show switches Videos, Photos, and All. The night tag then keeps the two tagged videos.</sub>
+    </td>
+    <td width="33%" valign="top">
+      <img src="./README/motion/preview-video.gif" alt="Large preview of a video, then the next item" />
+      <br />
+      <sub>A tall video starts playing, and the card fits it. Side buttons use a blurred poster. Next opens the square video.</sub>
+    </td>
+  </tr>
+</table>
+
+<p>
+  <img src="./README/motion/button-scale.gif" width="840" alt="Gallery button size slider and the larger Gallery pill" />
+  <br />
+  <sub>Gallery button size moves from 100% toward 250%. The floating Gallery pill grows with it.</sub>
+</p>
+
+The pinwheel fan is not in these clips. This plugin resizes Usgromana’s radial menu when that menu is already on the page. It does not draw the fan itself.
 
 ## Contents
 
