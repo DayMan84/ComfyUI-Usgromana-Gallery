@@ -1,13 +1,16 @@
 /**
  * Theme overrides. The selected base theme stays in place.
- * Custom colors and opacity are applied after it, per account.
+ * Custom colors and opacity are applied on the existing UI, without
+ * rebuilding the gallery window.
  */
 
-import { getTheme } from "./themes.js";
+import { colorAlpha, colorWithAlpha, getTheme, normalizeThemeId, THEME_REVISION } from "./themes.js";
 import { getGallerySettings } from "./gallerySettings.js";
 import { getAppearance, setAppearance } from "./socialApi.js";
 
 let overrides = null;
+let revision = 0;
+const listeners = new Set();
 
 const COLOR_FIELDS = [
     ["accent", "Accent"],
@@ -20,6 +23,8 @@ const COLOR_FIELDS = [
     ["danger", "Danger"],
     ["star", "Star rating"],
 ];
+
+const MOTION_STYLE_ID = "usg-appearance-motion";
 
 export function appearanceFields() {
     return COLOR_FIELDS;
@@ -53,70 +58,285 @@ export function contrastWarning(colors) {
     return "";
 }
 
-function applyTokens(theme, appearance) {
-    const root = document.documentElement;
+function ensureMotionStyles() {
+    if (typeof document === "undefined") return;
+    if (document.getElementById(MOTION_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = MOTION_STYLE_ID;
+    style.textContent = `
+.usg-gallery-panel,
+.usg-gallery-panel button,
+.usg-gallery-panel input,
+.usg-gallery-panel select,
+.usg-gallery-header,
+.usg-gallery-title,
+.usg-gallery-grid,
+.usg-gallery-settings,
+.usg-gallery-filters,
+.usg-slideout,
+#usg-gallery-image-menu {
+  transition-property: background-color, background, color, border-color, opacity, box-shadow, filter;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+#usg-gallery-launch-btn,
+#usg-gallery-launch-btn img,
+.usgromana-floating-button,
+.usgromana-floating-button img,
+.usgromana-radial-menu-button {
+  transition-property: background-color, background, color, border-color, opacity, box-shadow, width, height, min-width, min-height, max-width, max-height, padding, font-size, gap, border-radius, filter;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+.usg-gallery-panel {
+  background: var(--usg-window) !important;
+  color: var(--usg-text) !important;
+  border-color: var(--usg-border) !important;
+  box-shadow: 0 18px 55px var(--usg-shadow) !important;
+}
+.usg-gallery-header {
+  background: var(--usg-header) !important;
+  border-bottom-color: var(--usg-divider) !important;
+}
+.usg-gallery-title {
+  color: var(--usg-text) !important;
+}
+.usg-gallery-settings {
+  background: var(--usg-panel) !important;
+  color: var(--usg-text) !important;
+  border-color: var(--usg-border) !important;
+}
+.usg-gallery-filters {
+  background: var(--usg-surface) !important;
+  color: var(--usg-text) !important;
+  border-color: var(--usg-border) !important;
+}
+.usg-gallery-panel .usg-ink { color: var(--usg-text) !important; }
+.usg-gallery-panel .usg-ink-muted { color: var(--usg-text-secondary) !important; }
+@media (prefers-reduced-motion: reduce) {
+  .usg-gallery-panel,
+  .usg-gallery-panel button,
+  .usg-gallery-panel input,
+  .usg-gallery-panel select,
+  .usg-gallery-header,
+  .usg-gallery-title,
+  .usg-gallery-grid,
+  .usg-gallery-settings,
+  .usg-gallery-filters,
+  .usg-slideout,
+  #usg-gallery-image-menu,
+  #usg-gallery-launch-btn,
+  #usg-gallery-launch-btn img,
+  .usgromana-floating-button,
+  .usgromana-floating-button img,
+  .usgromana-radial-menu-button {
+    transition: none !important;
+  }
+}
+`;
+    document.head.appendChild(style);
+}
+
+function resolveAppearance(base, appearance) {
+    const theme = { ...base };
     const colors = (appearance && appearance.colors) || {};
-    const windowOpacity = appearance && appearance.windowOpacity != null ? appearance.windowOpacity : 0.85;
-    const panelOpacity = appearance && appearance.panelOpacity != null ? appearance.panelOpacity : 0.92;
-    const menuOpacity = appearance && appearance.menuOpacity != null ? appearance.menuOpacity : 0.85;
-    const background = colors.background || "#10141b";
-    const panel = colors.panel || "#17202b";
-    root.style.setProperty("--usg-bg", colors.background ? withAlpha(background, windowOpacity) : (theme.panelBackground || withAlpha(background, windowOpacity)));
-    root.style.setProperty("--usg-surface", colors.panel ? withAlpha(panel, panelOpacity) : (theme.cardBackground || theme.panelBackground));
-    root.style.setProperty("--usg-panel", colors.panel ? withAlpha(panel, panelOpacity) : (theme.modalBackground || theme.settingsBackground || "rgba(15,23,42,0.94)"));
-    root.style.setProperty("--usg-text", colors.text || theme.textPrimary || "#e5e7eb");
-    root.style.setProperty("--usg-text-secondary", colors.textSecondary || theme.textSecondary || "#94a3b8");
-    root.style.setProperty("--usg-text-muted", colors.textSecondary || theme.textMuted || "#94a3b8");
-    root.style.setProperty("--usg-accent", colors.accent || "#42a5f5");
-    root.style.setProperty("--usg-accent-hover", colors.accent || theme.buttonActiveBackground || "rgba(56,189,248,0.2)");
-    root.style.setProperty("--usg-border", colors.border || theme.panelBorder || theme.buttonBorder || "rgba(148,163,184,0.4)");
-    root.style.setProperty("--usg-divider", colors.border || theme.headerBorder || "rgba(148,163,184,0.3)");
-    root.style.setProperty("--usg-button-bg", colors.button || theme.buttonBackground || "#263747");
-    root.style.setProperty("--usg-button-hover", colors.button || theme.buttonBackgroundHover || "#334155");
-    root.style.setProperty("--usg-danger", colors.danger || theme.dangerText || "#fca5a5");
-    root.style.setProperty("--usg-star", colors.star || "#ffd86b");
-    root.style.setProperty("--usg-window-opacity", String(windowOpacity));
-    root.style.setProperty("--usg-panel-opacity", String(panelOpacity));
-    root.style.setProperty("--usg-menu-opacity", String(menuOpacity));
-    const menu = colors.panel ? withAlpha(panel, menuOpacity) : root.style.getPropertyValue("--usg-panel");
-    root.style.setProperty("--usg-overlay", menu);
-    document.querySelectorAll(".usg-gallery-panel, .usg-slideout, #usg-gallery-image-menu").forEach((node) => {
-        if (colors.background) node.style.background = withAlpha(background, windowOpacity);
-        if (colors.text) node.style.color = colors.text;
-    });
+    const windowOpacity = appearance && appearance.windowOpacity != null ? appearance.windowOpacity : null;
+    const panelOpacity = appearance && appearance.panelOpacity != null ? appearance.panelOpacity : null;
+    const menuOpacity = appearance && appearance.menuOpacity != null ? appearance.menuOpacity : null;
+    const settingsBase = base.settingsBackground || base.modalBackground;
+
+    if (colors.text) {
+        theme.textPrimary = colors.text;
+        theme.textTertiary = colors.text;
+        theme.buttonText = colors.text;
+        theme.inputText = colors.text;
+        theme.primaryText = colors.text;
+        theme.dividerColor = colors.text;
+    }
+    if (colors.textSecondary) {
+        theme.textSecondary = colors.textSecondary;
+        theme.textMuted = colors.textSecondary;
+    }
+    if (colors.border) {
+        theme.panelBorder = colors.border;
+        theme.headerBorder = colors.border;
+        theme.buttonBorder = colors.border;
+        theme.inputBorder = colors.border;
+        theme.cardBorder = colors.border;
+        theme.dividerBorder = colors.border;
+        theme.filterBorder = colors.border;
+        theme.settingsBorder = colors.border;
+        theme.modalBorder = colors.border;
+    }
+    if (colors.button) {
+        theme.buttonBackground = colors.button;
+        theme.buttonBackgroundHover = colors.button;
+    }
+    if (colors.accent) {
+        theme.buttonActiveBackground = colorWithAlpha(colors.accent, 0.28);
+        theme.primaryBackground = colors.accent;
+        theme.logoGlow = colorWithAlpha(colors.accent, 0.45);
+    }
+    if (colors.danger) {
+        theme.dangerText = colors.danger;
+        theme.dangerBorder = colors.danger;
+    }
+    if (colors.star) theme.star = colors.star;
+
+    if (appearance && (colors.background || windowOpacity != null)) {
+        const source = colors.background || theme.panelBackground;
+        theme.panelBackground = windowOpacity != null ? colorWithAlpha(source, windowOpacity) : source;
+    }
+    if (appearance && (colors.panel || panelOpacity != null)) {
+        const source = colors.panel || theme.cardBackground;
+        const painted = panelOpacity != null ? colorWithAlpha(source, panelOpacity) : source;
+        theme.cardBackground = painted;
+        theme.modalBackground = painted;
+        theme.filterBackground = painted;
+        const headerSource = colors.panel || theme.headerBackground;
+        theme.headerBackground = panelOpacity != null ? colorWithAlpha(headerSource, panelOpacity) : headerSource;
+    }
+    const menuColor = (appearance && (colors.panel || colors.background)) || settingsBase;
+    if (appearance && menuOpacity != null) {
+        theme.menuBackground = colorWithAlpha(menuColor, menuOpacity);
+    } else if (appearance && (colors.panel || colors.background)) {
+        theme.menuBackground = colorWithAlpha(menuColor, colorAlpha(settingsBase, 0.9));
+    } else {
+        theme.menuBackground = settingsBase;
+    }
+    return theme;
+}
+
+function applyTokens(theme) {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    ensureMotionStyles();
+    const set = (name, value) => {
+        if (value != null && value !== "") root.style.setProperty(name, String(value));
+    };
+    set("--usg-bg", theme.panelBackground);
+    set("--usg-window", theme.panelBackground);
+    set("--usg-surface", theme.cardBackground);
+    set("--usg-panel", theme.menuBackground || theme.settingsBackground);
+    set("--usg-settings", theme.settingsBackground);
+    set("--usg-header", theme.headerBackground);
+    set("--usg-text", theme.textPrimary);
+    set("--usg-text-secondary", theme.textSecondary);
+    set("--usg-text-muted", theme.textMuted || theme.textSecondary);
+    set("--usg-button-text", theme.buttonText);
+    set("--usg-accent", theme.primaryBackground);
+    set("--usg-accent-hover", theme.buttonActiveBackground);
+    set("--usg-border", theme.panelBorder);
+    set("--usg-divider", theme.headerBorder);
+    set("--usg-button-bg", theme.buttonBackground);
+    set("--usg-button-hover", theme.buttonBackgroundHover);
+    set("--usg-danger", theme.dangerText);
+    set("--usg-star", theme.star || "#ffd86b");
+    set("--usg-shadow", theme.panelShadow);
+    set("--usg-overlay", theme.menuBackground || theme.settingsBackground);
+    if (theme.name) root.dataset.usgTheme = theme.name;
 }
 
 export function applyResolvedTheme(themeName) {
     const settings = getGallerySettings();
-    const theme = themeName || (overrides && overrides.theme) || settings.theme || "dark";
-    const base = getTheme(theme);
-    applyTokens(base, overrides && overrides.appearance);
-    return base;
+    const requested = themeName || (overrides && overrides.theme) || settings.theme || "dark";
+    const id = normalizeThemeId(requested, THEME_REVISION);
+    const base = getTheme(id);
+    const theme = resolveAppearance(base, overrides && overrides.appearance);
+    applyTokens(theme);
+    return theme;
+}
+
+function pack(next) {
+    if (!next || typeof next !== "object") return null;
+    const theme = typeof next.theme === "string" && next.theme.trim()
+        ? normalizeThemeId(next.theme, THEME_REVISION)
+        : null;
+    const source = next.appearance && typeof next.appearance === "object" ? next.appearance : null;
+    let appearance = null;
+    if (source) {
+        appearance = { colors: { ...(source.colors || {}) } };
+        ["windowOpacity", "panelOpacity", "menuOpacity"].forEach((key) => {
+            if (source[key] != null) appearance[key] = source[key];
+        });
+    }
+    if (!theme && !appearance) return null;
+    return { theme, themeRevision: THEME_REVISION, appearance };
+}
+
+export function appearanceFromPayload(stored) {
+    if (!stored || typeof stored !== "object") return null;
+    const theme = typeof stored.theme === "string" ? stored.theme.trim() : "";
+    const appearance = stored.appearance && typeof stored.appearance === "object" ? stored.appearance : null;
+    if (!theme && !appearance) return null;
+    const rev = stored.themeRevision == null ? 1 : Number(stored.themeRevision) || 1;
+    return {
+        theme: theme ? normalizeThemeId(theme, rev) : null,
+        themeRevision: THEME_REVISION,
+        appearance,
+    };
+}
+
+function emit() {
+    const theme = applyResolvedTheme();
+    for (const fn of listeners) {
+        try {
+            fn(theme);
+        } catch (err) {
+            console.warn("[UsgromanaGallery] Appearance listener error:", err);
+        }
+    }
+    return theme;
+}
+
+export function subscribeAppearance(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+}
+
+/**
+ * Paint appearance on the current theme immediately. Does not save.
+ */
+export function previewAppearance(next) {
+    revision += 1;
+    overrides = pack(next);
+    return emit();
 }
 
 export async function loadAppearance() {
+    const token = revision;
     try {
         const stored = await getAppearance();
-        overrides = stored && stored.appearance ? stored : null;
-        if (stored && stored.theme) overrides = { ...(overrides || {}), theme: stored.theme, appearance: stored.appearance };
+        if (token !== revision) return overrides;
+        overrides = appearanceFromPayload(stored);
     } catch (err) {
+        if (token !== revision) return overrides;
         overrides = null;
     }
-    applyResolvedTheme();
+    emit();
     return overrides;
 }
 
 export async function saveAppearance(next) {
-    const saved = await setAppearance(next);
-    overrides = saved.appearance || saved.theme ? { theme: saved.theme, appearance: saved.appearance } : null;
-    applyResolvedTheme(saved.theme);
+    const token = revision;
+    const payload = pack(next);
+    const saved = await setAppearance({
+        theme: payload && payload.theme,
+        themeRevision: THEME_REVISION,
+        appearance: payload && payload.appearance,
+    });
+    if (token !== revision) return overrides;
+    const packed = appearanceFromPayload(saved);
+    if (packed) overrides = packed;
+    emit();
     return overrides;
 }
 
 export async function resetAppearance() {
+    revision += 1;
     await setAppearance({ reset: true });
     overrides = null;
-    applyResolvedTheme();
+    emit();
 }
 
 export function currentAppearance() {

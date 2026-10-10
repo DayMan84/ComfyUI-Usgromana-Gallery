@@ -2,13 +2,15 @@
 
 import { STORAGE_KEYS } from "./constants.js";
 import { galleryApi } from "./api.js";
+import { normalizeThemeId, THEME_REVISION } from "./themes.js";
 
 const STORAGE_KEY = STORAGE_KEYS.SETTINGS;
 
 const DEFAULT_SETTINGS = {
     masonryLayout: false,
     enableDrag: true,
-    theme: "dark",          // "dark" | "darkHighContrast" | "darkSubtle" | "light" | "lightSubtle" | "darkBlue"
+    theme: "dark",          // dark | darkBlue | light | midnight | ocean | forest | rose | sand
+    themeRevision: THEME_REVISION,
     showRatingInGrid: true,
     thumbSize: "md",        // "sm" | "md" | "lg"
     anchorToManagerBar: false,
@@ -43,12 +45,34 @@ const DEFAULT_SETTINGS = {
 let settings = loadSettingsFromStorage();
 const listeners = new Set();
 
-// Load server settings on init and merge with local
+function migrateThemeFields(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    if (source.theme == null && source.themeRevision == null) return { ...source };
+    const rev = source.themeRevision == null ? 1 : Number(source.themeRevision) || 1;
+    return {
+        ...source,
+        theme: normalizeThemeId(source.theme || "dark", rev),
+        themeRevision: THEME_REVISION,
+    };
+}
+
+function mergeSettings(local, incoming) {
+    return {
+        ...DEFAULT_SETTINGS,
+        ...local,
+        ...migrateThemeFields(incoming),
+        themeRevision: THEME_REVISION,
+    };
+}
+
+// Load server settings on init and merge with local.
+// Theme ids are migrated before the merge so a removed theme cannot
+// overwrite a local fallback, and Light Subtle still lands on Light.
 (async () => {
     try {
         const serverSettings = await galleryApi.getServerSettings();
         if (serverSettings && Object.keys(serverSettings).length > 0) {
-            settings = { ...settings, ...serverSettings };
+            settings = mergeSettings(settings, serverSettings);
             saveSettingsToStorage(settings);
         }
     } catch (err) {
@@ -61,7 +85,12 @@ export function getGallerySettings() {
 }
 
 export function updateGallerySettings(patch) {
-    settings = { ...settings, ...patch };
+    const next = { ...patch };
+    if (Object.prototype.hasOwnProperty.call(next, "theme")) {
+        next.theme = normalizeThemeId(next.theme, THEME_REVISION);
+        next.themeRevision = THEME_REVISION;
+    }
+    settings = { ...settings, ...next, themeRevision: THEME_REVISION };
     saveSettingsToStorage(settings);
     
     // Also save to server for persistence
@@ -102,7 +131,7 @@ function loadSettingsFromStorage() {
         if (!raw) return { ...DEFAULT_SETTINGS };
 
         const parsed = JSON.parse(raw);
-        return { ...DEFAULT_SETTINGS, ...parsed };
+        return mergeSettings(DEFAULT_SETTINGS, parsed);
     } catch (err) {
         console.warn("[UsgromanaGallery] Failed to load settings from storage:", err);
         return { ...DEFAULT_SETTINGS };

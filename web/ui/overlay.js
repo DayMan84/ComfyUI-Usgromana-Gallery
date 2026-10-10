@@ -12,6 +12,9 @@ import {
 import { ASSETS } from "../core/constants.js";
 import { galleryApi } from "../core/api.js";
 import { subscribeTheme, getCurrentTheme } from "../core/themeManager.js";
+import { THEME_REVISION, themeChoices, themeUsesLightLogo } from "../core/themes.js";
+import { applyGalleryButtonScale, applyPinwheelScale } from "../core/galleryButton.js";
+import { currentAppearance, previewAppearance, saveAppearance } from "../core/appearance.js";
 import { initWindowManager, createPinButton, updateTheme as updateWindowManagerTheme, getPinState } from "./windowManager.js";
 
 let overlayEl = null;
@@ -51,8 +54,9 @@ function ensureOverlay() {
     Object.assign(panel.style, {
         width: "90vw",
         height: "90vh",
-        maxWidth: "1200px",
-        maxHeight: "800px",
+        maxWidth: "none",
+        maxHeight: "none",
+        boxSizing: "border-box",
         background: theme.panelBackground,
         borderRadius: "16px",
         border: `1px solid ${theme.panelBorder}`,
@@ -69,6 +73,7 @@ function ensureOverlay() {
     // Header
     // ---------------------------------------------------------------
     const header = document.createElement("div");
+    header.className = "usg-gallery-header";
     Object.assign(header.style, {
         display: "flex",
         alignItems: "center",
@@ -87,8 +92,9 @@ function ensureOverlay() {
     });
 
     const logoImg = document.createElement("img");
+    logoImg.className = "usg-gallery-logo";
     logoImg.alt = "Usgromana Gallery Pro";
-    logoImg.src = ASSETS.DARK_LOGO;
+    logoImg.src = themeUsesLightLogo(theme) ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
     Object.assign(logoImg.style, {
         height: "18px",
         width: "auto",
@@ -96,6 +102,7 @@ function ensureOverlay() {
     });
 
     const titleEl = document.createElement("div");
+    titleEl.className = "usg-gallery-title";
     titleEl.textContent = "USGROMANA GALLERY PRO";
     Object.assign(titleEl.style, {
         fontSize: "13px",
@@ -254,7 +261,8 @@ function ensureOverlay() {
 
     // Theme/logo + remember last inline divider style
     subscribeGallerySettings((s) => {
-        logoImg.src = s.theme === "light" || s.theme === "lightSubtle" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        const nextLogo = themeUsesLightLogo(s.theme) ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        if (logoImg.getAttribute("src") !== nextLogo) logoImg.src = nextLogo;
         if (s.dividerStyle && s.dividerStyle !== "page") {
             lastInlineDividerStyle = s.dividerStyle;
         }
@@ -313,6 +321,7 @@ function openSettingsModal(panel) {
 
     if (!settingsModalEl) {
         settingsModalEl = document.createElement("div");
+        settingsModalEl.className = "usg-gallery-settings";
         Object.assign(settingsModalEl.style, {
             position: "fixed",
             top: "50%",
@@ -458,26 +467,23 @@ function openSettingsModal(panel) {
         const themeLabel = document.createElement("span");
         themeLabel.textContent = "Theme:";
         const themeSelect = document.createElement("select");
-        [
-            { value: "dark", label: "Dark" },
-            { value: "darkHighContrast", label: "Dark High Contrast" },
-            { value: "darkSubtle", label: "Dark Subtle" },
-            { value: "darkBlue", label: "Dark Blue" },
-            { value: "light", label: "Light" },
-            { value: "lightSubtle", label: "Light Subtle" },
-        ].forEach((opt) => {
+        themeChoices().forEach((opt) => {
             const o = document.createElement("option");
-            o.value = opt.value;
+            o.value = opt.id;
             o.textContent = opt.label;
             themeSelect.appendChild(o);
         });
         themeSelect.value = current.theme || "dark";
         themeSelect.onchange = () => {
-            updateGallerySettings({ theme: themeSelect.value });
-            // Trigger theme update
-            if (window.USG_GALLERY_APPLY_THEME) {
-                window.USG_GALLERY_APPLY_THEME(themeSelect.value);
-            }
+            const stored = currentAppearance();
+            const next = {
+                theme: themeSelect.value,
+                themeRevision: THEME_REVISION,
+                appearance: (stored && stored.appearance) || { colors: {} },
+            };
+            previewAppearance(next);
+            updateGallerySettings({ theme: themeSelect.value, themeRevision: THEME_REVISION });
+            saveAppearance(next).catch(() => {});
         };
         themeRow.appendChild(themeLabel);
         themeRow.appendChild(themeSelect);
@@ -570,7 +576,10 @@ function openSettingsModal(panel) {
         buttonScaleReadout.style.minWidth = "40px";
         const commitButtonScale = () => {
             buttonScaleReadout.textContent = `${buttonScaleInput.value}%`;
-            updateGallerySettings({ galleryButtonScale: Number(buttonScaleInput.value) / 100 });
+            const scale = Number(buttonScaleInput.value) / 100;
+            applyGalleryButtonScale(document.getElementById("usg-gallery-launch-btn"), scale);
+            applyPinwheelScale(scale);
+            updateGallerySettings({ galleryButtonScale: scale });
         };
         buttonScaleInput.oninput = commitButtonScale;
         buttonScaleControls.appendChild(buttonScaleInput);
@@ -1083,6 +1092,7 @@ function openFilterPanel() {
     if (!filterPanelEl) {
         const theme = getCurrentTheme();
         filterPanelEl = document.createElement("div");
+        filterPanelEl.className = "usg-gallery-filters";
         Object.assign(        filterPanelEl.style, {
             position: "fixed",
             top: "90px",
@@ -1546,7 +1556,8 @@ function applyThemeToOverlay(theme) {
     }
     
     // Update header - find it more reliably
-    const header = panel?.querySelector('div[style*="borderBottom"]') || 
+    const header = panel?.querySelector(".usg-gallery-header") ||
+                   panel?.querySelector('div[style*="borderBottom"]') ||
                    panel?.firstElementChild; // Header is typically the first child
     if (header && header.style.display === 'flex' && header.style.alignItems === 'center') {
         header.style.borderBottom = `1px solid ${theme.headerBorder}`;
@@ -1555,14 +1566,17 @@ function applyThemeToOverlay(theme) {
     }
     
     // Update logo glow
-    const logoImg = panel?.querySelector('img');
+    const logoImg = panel?.querySelector(".usg-gallery-logo");
     if (logoImg) {
+        const nextLogo = theme.lightSurface ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        if (logoImg.getAttribute("src") !== nextLogo) logoImg.src = nextLogo;
         logoImg.style.filter = `drop-shadow(0 0 6px ${theme.logoGlow})`;
     }
     
     // Update title text - find it by text content or style
-    const titleEl = panel?.querySelector('div[style*="textTransform"]') || 
-                    Array.from(panel?.querySelectorAll('div') || []).find(el => 
+    const titleEl = panel?.querySelector(".usg-gallery-title") ||
+                    panel?.querySelector('div[style*="textTransform"]') ||
+                    Array.from(panel?.querySelectorAll('div') || []).find(el =>
                         el.textContent === "USGROMANA GALLERY PRO"
                     );
     if (titleEl) {
@@ -1584,7 +1598,7 @@ function applyThemeToOverlay(theme) {
     
     // Update settings modal if it exists
     if (settingsModalEl) {
-        settingsModalEl.style.background = theme.settingsBackground;
+        settingsModalEl.style.background = theme.menuBackground || theme.settingsBackground;
         settingsModalEl.style.border = `1px solid ${theme.settingsBorder}`;
         settingsModalEl.style.boxShadow = `0 18px 40px ${theme.modalShadow}`;
         settingsModalEl.style.color = theme.textPrimary;
@@ -1610,7 +1624,7 @@ function applyThemeToOverlay(theme) {
     
     // Update filter panel if it exists
     if (filterPanelEl) {
-        filterPanelEl.style.background = theme.settingsBackground;
+        filterPanelEl.style.background = theme.filterBackground || theme.cardBackground;
         filterPanelEl.style.border = `1px solid ${theme.settingsBorder}`;
         filterPanelEl.style.boxShadow = `0 18px 50px ${theme.modalShadow}`;
         filterPanelEl.style.color = theme.textPrimary;

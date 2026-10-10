@@ -51,13 +51,30 @@ export function initExplorer(root) {
         renderFileList(lastFolders, lastFiles);
     });
 
-    subscribeTheme(() => {
-        if (rootEl) {
-            // Rebuild UI to apply new theme colors
-            buildExplorerUI();
-            // Reload current path to re-render with new theme
-            loadCurrentPath(currentPath);
+    subscribeTheme((theme) => {
+        applyThemeToExplorer(theme);
+    });
+}
+
+function applyThemeToExplorer(theme) {
+    if (!rootEl || !theme) return;
+    const toolbar = rootEl.querySelector(".usg-explorer-toolbar");
+    if (toolbar) toolbar.style.borderBottomColor = theme.headerBorder;
+    rootEl.querySelectorAll("button").forEach((btn) => {
+        if (btn.dataset.usgIconAction === "1") {
+            btn.style.color = theme.buttonText;
+            return;
         }
+        const active = btn.dataset.viewMode && btn.dataset.viewMode === currentViewMode;
+        btn.style.borderColor = theme.buttonBorder;
+        btn.style.background = active ? theme.buttonActiveBackground : theme.buttonBackground;
+        btn.style.color = active ? theme.textPrimary : theme.buttonText;
+    });
+    rootEl.querySelectorAll(".usg-ink").forEach((el) => {
+        el.style.color = theme.textPrimary;
+    });
+    rootEl.querySelectorAll(".usg-ink-muted").forEach((el) => {
+        el.style.color = theme.textSecondary;
     });
 }
 
@@ -72,6 +89,7 @@ function buildExplorerUI() {
 
     // Toolbar with actions
     const toolbar = document.createElement("div");
+    toolbar.className = "usg-explorer-toolbar";
     Object.assign(toolbar.style, {
         display: "flex",
         alignItems: "center",
@@ -108,6 +126,7 @@ function buildExplorerUI() {
     const viewModeLabel = document.createElement("span");
     viewModeLabel.textContent = "View:";
     viewModeLabel.style.fontSize = "11px";
+    viewModeLabel.className = "usg-ink-muted";
     viewModeLabel.style.color = theme.textSecondary;
     viewModeLabel.style.marginRight = "4px";
     viewModeContainer.appendChild(viewModeLabel);
@@ -124,6 +143,7 @@ function buildExplorerUI() {
         const btn = document.createElement("button");
         btn.textContent = `${mode.icon} ${mode.label}`;
         btn.title = mode.label;
+        btn.dataset.viewMode = mode.id;
         Object.assign(btn.style, {
             borderRadius: "4px",
             border: "1px solid rgba(148,163,184,0.35)",
@@ -151,12 +171,12 @@ function buildExplorerUI() {
         };
         btn.onmouseenter = () => {
             if (currentViewMode !== mode.id) {
-                btn.style.background = theme.buttonBackgroundHover;
+                btn.style.background = getCurrentTheme().buttonBackgroundHover;
             }
         };
         btn.onmouseleave = () => {
             if (currentViewMode !== mode.id) {
-                btn.style.background = theme.buttonBackground;
+                btn.style.background = getCurrentTheme().buttonBackground;
             }
         };
         viewModeContainer.appendChild(btn);
@@ -260,6 +280,7 @@ function updateBreadcrumb() {
     parts.forEach((part, index) => {
         const separator = document.createElement("span");
         separator.textContent = " / ";
+        separator.className = "usg-ink-muted";
         separator.style.color = theme.textSecondary;
         breadcrumbEl.appendChild(separator);
 
@@ -460,6 +481,7 @@ function createFolderItem(folder) {
         name.style.textAlign = "center";
         name.style.marginTop = "2px";
     }
+    name.className = "usg-ink";
     name.style.color = theme.textPrimary;
 
     const count = document.createElement("span");
@@ -470,6 +492,7 @@ function createFolderItem(folder) {
         } else {
             count.style.fontSize = currentViewMode === "smallIcons" ? "8px" : "9px";
         }
+        count.className = "usg-ink-muted";
         count.style.color = theme.textSecondary;
     }
 
@@ -710,6 +733,7 @@ function createFileItem(file) {
         name.style.textAlign = "center";
         name.style.marginTop = "2px";
     }
+    name.className = "usg-ink";
     name.style.color = theme.textPrimary;
 
     const size = document.createElement("span");
@@ -718,12 +742,14 @@ function createFileItem(file) {
         size.textContent = sizeStr;
         if (currentViewMode === "details") {
             size.style.fontSize = "10px";
+            size.className = "usg-ink-muted";
             size.style.color = theme.textSecondary;
         } else {
             size.style.fontSize = "10px";
             size.style.width = "100%";
             size.style.textAlign = "center";
             size.style.marginTop = "2px";
+            size.className = "usg-ink-muted";
             size.style.color = theme.textSecondary;
         }
     }
@@ -836,6 +862,7 @@ function createActionButton(icon, title, onClick) {
     const btn = document.createElement("button");
     btn.textContent = icon;
     btn.title = title;
+    btn.dataset.usgIconAction = "1";
     const isIconView = currentViewMode !== "details";
     Object.assign(btn.style, {
         borderRadius: "4px",
@@ -849,10 +876,10 @@ function createActionButton(icon, title, onClick) {
         backdropFilter: isIconView ? "blur(4px)" : "none",
     });
     btn.onmouseenter = () => {
-        btn.style.background = isIconView ? "rgba(0,0,0,0.9)" : theme.buttonBackgroundHover;
+        btn.style.background = isIconView ? "rgba(0,0,0,0.9)" : getCurrentTheme().buttonBackgroundHover;
     };
     btn.onmouseleave = () => {
-        btn.style.background = isIconView ? "rgba(0,0,0,0.7)" : theme.buttonBackground;
+        btn.style.background = isIconView ? "rgba(0,0,0,0.7)" : getCurrentTheme().buttonBackground;
     };
     btn.onclick = onClick;
     return btn;

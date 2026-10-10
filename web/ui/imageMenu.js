@@ -94,9 +94,9 @@ function showMenu(x, y, items) {
         "position:fixed",
         "z-index:1000001",
         "min-width:168px",
-        "background:#0f172a",
-        "color:#e5e7eb",
-        "border:1px solid rgba(148,163,184,0.45)",
+        "background:var(--usg-panel, #0f172a)",
+        "color:var(--usg-text, #e5e7eb)",
+        "border:1px solid var(--usg-border, rgba(148,163,184,0.45))",
         "border-radius:10px",
         "padding:6px",
         "box-shadow:0 16px 40px rgba(0,0,0,0.45)",
@@ -113,14 +113,14 @@ function showMenu(x, y, items) {
             "text-align:left",
             "border:0",
             "background:transparent",
-            "color:#e5e7eb",
+            "color:inherit",
             "padding:8px 10px",
             "border-radius:8px",
             "cursor:pointer",
             "font-size:13px",
         ].join(";");
         button.onmouseenter = () => {
-            button.style.background = "rgba(56,189,248,0.18)";
+            button.style.background = "var(--usg-accent-hover, rgba(56,189,248,0.18))";
         };
         button.onmouseleave = () => {
             button.style.background = "transparent";

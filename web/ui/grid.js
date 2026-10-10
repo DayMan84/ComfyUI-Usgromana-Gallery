@@ -157,6 +157,25 @@ function ensureGalleryGridStyles() {
 /**
  * Apply theme colors to grid UI elements
  */
+const GRID_RENDER_KEYS = [
+    "masonryLayout",
+    "showRatingInGrid",
+    "thumbSize",
+    "showDividers",
+    "dividerMode",
+    "dividerStyle",
+    "dividerLayout",
+    "arrangeBy",
+    "sortAscending",
+    "enableDrag",
+    "videoThumbnailMode",
+];
+
+function gridRenderChanged(prev, next) {
+    if (!prev || !next) return true;
+    return GRID_RENDER_KEYS.some((key) => prev[key] !== next[key]);
+}
+
 function applyThemeToGrid(theme) {
     if (!rootEl) return;
     
@@ -167,6 +186,10 @@ function applyThemeToGrid(theme) {
     root.style.setProperty('--usg-divider-color', theme.dividerColor);
     root.style.setProperty('--usg-divider-border', theme.dividerBorder);
     root.style.setProperty('--usg-card-hover-shadow', theme.cardHoverShadow);
+    if (gridContentEl) {
+        gridContentEl.style.background = theme.cardBackground;
+        gridContentEl.style.color = theme.textPrimary;
+    }
     
     // Update filter bar colors
     const filterBar = rootEl.querySelector('div[style*="display: flex"]');
@@ -185,13 +208,8 @@ function applyThemeToGrid(theme) {
     // Update buttons
     const buttons = rootEl.querySelectorAll('button');
     buttons.forEach(btn => {
-        if (btn.id && btn.id.startsWith('usg-filter-btn-')) {
-            // Rating filter buttons
-            const isActive = btn.style.background.includes('180,180,255') || 
-                           btn.style.background.includes('rgba(180,180,255');
-            btn.style.border = `1px solid ${theme.cardBorder}`;
-            btn.style.background = isActive ? theme.buttonActiveBackground : theme.cardBackground;
-            btn.style.color = theme.textPrimary;
+        if (btn.id && (btn.id.startsWith('usg-filter-btn-') || btn.id.startsWith('usg-media-filter-'))) {
+            return;
         } else if (btn.textContent === 'Refresh' || btn.textContent.includes('Download Selected') || btn.textContent.includes('Delete Selected')) {
             // Action buttons
             if (btn.textContent.includes('Delete')) {
@@ -210,6 +228,8 @@ function applyThemeToGrid(theme) {
             btn.style.color = theme.textPrimary;
         }
     });
+    updateMediaFilterButtons();
+    updateFilterButtons();
     
     // Update loading indicator
     const loadingIndicator = rootEl.querySelector('.usg-loading-indicator');
@@ -518,7 +538,9 @@ export function initGrid(root) {
     reloadImagesAndRender();
 
     unsubscribeSettings = subscribeGallerySettings((s) => {
+        const prev = gallerySettings;
         gallerySettings = s;
+        if (prev !== s && !gridRenderChanged(prev, s)) return;
         renderGridContent();
     });
 
@@ -1247,6 +1269,7 @@ function renderGridContent() {
                 ? "No photos found."
                 : "No images found. Drop images here to add them to your library.";
         empty.textContent = emptyText;
+        empty.className = "usg-ink-muted";
         Object.assign(empty.style, {
             color: "#aaa", fontSize: "14px", textAlign: "center", marginTop: "40px", width: "100%",
         });
@@ -1263,12 +1286,12 @@ function renderGridContent() {
     if (pageMode) {
         Object.assign(gridContentEl.style, {
             display: "flex", flexDirection: "column", gap: "16px", padding: "6px",
-            borderRadius: "14px", background: "rgba(15,23,42,0.18)", width: "100%",
+            borderRadius: "14px", background: getCurrentTheme().cardBackground, width: "100%",
             boxSizing: "border-box", alignItems: "stretch",
         });
     } else {
         const commonGridStyle = {
-            padding: "6px", borderRadius: "14px", background: "rgba(15, 23, 42, 0.32)",
+            padding: "6px", borderRadius: "14px", background: getCurrentTheme().cardBackground,
             width: "100%", boxSizing: "border-box",
         };
         if (USE_MASONRY_LAYOUT || gallerySettings.masonryLayout) {

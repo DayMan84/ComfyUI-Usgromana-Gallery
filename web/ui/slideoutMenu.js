@@ -120,7 +120,7 @@ export function createSlideoutMenu({
         panel.style.left = `${left}px`;
         panel.style.top = `${top}px`;
         if (!reducedMotion()) {
-            panel.style.transition = "transform 140ms ease, opacity 140ms ease";
+            panel.style.transition = "transform 140ms ease, opacity 140ms ease, background-color 180ms ease, color 180ms ease, border-color 180ms ease";
         }
         panel.style.transform = "translateX(0)";
         panel.style.opacity = "1";

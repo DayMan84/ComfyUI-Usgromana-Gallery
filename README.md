@@ -150,9 +150,9 @@ Position, size, and pin state are remembered in the browser. The settings window
 
 ## Appearance
 
-Six base themes ship with the gallery:
+Eight base themes ship with the gallery:
 
-Dark · Dark High Contrast · Dark Subtle · Dark Blue · Light · Light Subtle
+Dark · Dark Blue · Light · Midnight · Ocean · Forest · Rose · Sand
 
 **Settings → Appearance** stores overrides for the current user on top of the base theme:
 
@@ -175,7 +175,7 @@ Dark · Dark High Contrast · Dark Subtle · Dark Blue · Light · Light Subtle
 | Anchor Gallery pill to top bar | Park the launch button in the action bar |
 | Enable real-time file updates | Watch the library for new files |
 | Use polling file observer | Poll the folder when native watching is off |
-| Theme | One of the six base themes |
+| Theme | One of the eight base themes |
 | Thumbnail size | Small, medium, or large |
 | File extensions | Defaults to `.png,.jpg,.jpeg,.webp,.gif,.bmp` |
 | Root gallery folder | A folder inside the output directory. Leave empty for the output directory itself |
