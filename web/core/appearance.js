@@ -4,7 +4,7 @@
  * rebuilding the gallery window.
  */
 
-import { getTheme, normalizeThemeId, THEME_REVISION, colorWithAlpha } from "./themes.js";
+import { colorAlpha, colorWithAlpha, getTheme, normalizeThemeId, THEME_REVISION } from "./themes.js";
 import { getGallerySettings } from "./gallerySettings.js";
 import { getAppearance, setAppearance } from "./socialApi.js";
 
@@ -74,7 +74,11 @@ function ensureMotionStyles() {
 .usg-gallery-settings,
 .usg-gallery-filters,
 .usg-slideout,
-#usg-gallery-image-menu,
+#usg-gallery-image-menu {
+  transition-property: background-color, background, color, border-color, opacity, box-shadow, filter;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
 #usg-gallery-launch-btn,
 #usg-gallery-launch-btn img,
 .usgromana-floating-button,
@@ -97,9 +101,13 @@ function ensureMotionStyles() {
 .usg-gallery-title {
   color: var(--usg-text) !important;
 }
-.usg-gallery-settings,
+.usg-gallery-settings {
+  background: var(--usg-panel) !important;
+  color: var(--usg-text) !important;
+  border-color: var(--usg-border) !important;
+}
 .usg-gallery-filters {
-  background: var(--usg-settings, var(--usg-panel)) !important;
+  background: var(--usg-surface) !important;
   color: var(--usg-text) !important;
   border-color: var(--usg-border) !important;
 }
@@ -135,6 +143,7 @@ function resolveAppearance(base, appearance) {
     const windowOpacity = appearance && appearance.windowOpacity != null ? appearance.windowOpacity : null;
     const panelOpacity = appearance && appearance.panelOpacity != null ? appearance.panelOpacity : null;
     const menuOpacity = appearance && appearance.menuOpacity != null ? appearance.menuOpacity : null;
+    const settingsBase = base.settingsBackground || base.modalBackground;
 
     if (colors.text) {
         theme.textPrimary = colors.text;
@@ -183,15 +192,18 @@ function resolveAppearance(base, appearance) {
         const painted = panelOpacity != null ? colorWithAlpha(source, panelOpacity) : source;
         theme.cardBackground = painted;
         theme.modalBackground = painted;
-        theme.settingsBackground = painted;
         theme.filterBackground = painted;
         const headerSource = colors.panel || theme.headerBackground;
         theme.headerBackground = panelOpacity != null ? colorWithAlpha(headerSource, panelOpacity) : headerSource;
     }
-    const menuSource = (appearance && (colors.panel || colors.background)) || theme.settingsBackground || theme.modalBackground;
-    theme.menuBackground = appearance && menuOpacity != null
-        ? colorWithAlpha(menuSource, menuOpacity)
-        : menuSource;
+    const menuColor = (appearance && (colors.panel || colors.background)) || settingsBase;
+    if (appearance && menuOpacity != null) {
+        theme.menuBackground = colorWithAlpha(menuColor, menuOpacity);
+    } else if (appearance && (colors.panel || colors.background)) {
+        theme.menuBackground = colorWithAlpha(menuColor, colorAlpha(settingsBase, 0.9));
+    } else {
+        theme.menuBackground = settingsBase;
+    }
     return theme;
 }
 

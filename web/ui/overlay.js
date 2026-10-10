@@ -54,8 +54,9 @@ function ensureOverlay() {
     Object.assign(panel.style, {
         width: "90vw",
         height: "90vh",
-        maxWidth: "1200px",
-        maxHeight: "800px",
+        maxWidth: "none",
+        maxHeight: "none",
+        boxSizing: "border-box",
         background: theme.panelBackground,
         borderRadius: "16px",
         border: `1px solid ${theme.panelBorder}`,
@@ -1597,7 +1598,7 @@ function applyThemeToOverlay(theme) {
     
     // Update settings modal if it exists
     if (settingsModalEl) {
-        settingsModalEl.style.background = theme.settingsBackground;
+        settingsModalEl.style.background = theme.menuBackground || theme.settingsBackground;
         settingsModalEl.style.border = `1px solid ${theme.settingsBorder}`;
         settingsModalEl.style.boxShadow = `0 18px 40px ${theme.modalShadow}`;
         settingsModalEl.style.color = theme.textPrimary;
@@ -1623,7 +1624,7 @@ function applyThemeToOverlay(theme) {
     
     // Update filter panel if it exists
     if (filterPanelEl) {
-        filterPanelEl.style.background = theme.settingsBackground;
+        filterPanelEl.style.background = theme.filterBackground || theme.cardBackground;
         filterPanelEl.style.border = `1px solid ${theme.settingsBorder}`;
         filterPanelEl.style.boxShadow = `0 18px 50px ${theme.modalShadow}`;
         filterPanelEl.style.color = theme.textPrimary;

@@ -149,6 +149,8 @@ function updatePinState() {
         panelEl.style.position = "absolute";
         panelEl.style.margin = "0";
         panelEl.style.pointerEvents = "auto"; // Panel itself should receive clicks
+        panelEl.style.maxWidth = "none";
+        panelEl.style.maxHeight = "none";
         
         // Restore saved position and size or use current position
         const savedState = loadWindowState();
@@ -305,6 +307,11 @@ function startResize(e) {
     
     panelStartWidth = panelEl.offsetWidth;
     panelStartHeight = panelEl.offsetHeight;
+    // Size must track the pointer. A width/height transition eases each
+    // step and makes the window lag, then snap when the drag stops.
+    panelEl.style.maxWidth = "none";
+    panelEl.style.maxHeight = "none";
+    panelEl.style.transitionProperty = "none";
     
     document.addEventListener("mousemove", onResize);
     document.addEventListener("mouseup", stopResize);
@@ -359,6 +366,7 @@ function stopResize() {
     isResizing = false;
     document.removeEventListener("mousemove", onResize);
     document.removeEventListener("mouseup", stopResize);
+    if (panelEl) panelEl.style.transitionProperty = "";
     saveWindowState();
 }
 
