@@ -1,9 +1,10 @@
-import { getThemeNames } from "../core/themes.js";
+import { colorAlpha, getTheme, normalizeThemeId, themeChoices, THEME_REVISION } from "../core/themes.js";
 import { getGallerySettings, updateGallerySettings } from "../core/gallerySettings.js";
 import {
     appearanceFields,
     contrastWarning,
     currentAppearance,
+    previewAppearance,
     resetAppearance,
     saveAppearance,
 } from "../core/appearance.js";
@@ -30,17 +31,22 @@ function slider(label, value, onInput) {
     };
     row.append(input, readout);
     wrap.append(title, row);
+    wrap.setValue = (next) => {
+        input.value = String(Math.round(Number(next) * 100));
+        readout.textContent = `${input.value}%`;
+    };
     return wrap;
 }
 
 export function openAppearanceSettings(anchor) {
     const stored = currentAppearance() || {};
-    const appearance = stored.appearance || {
-        windowOpacity: 0.85,
-        panelOpacity: 0.92,
-        menuOpacity: 0.85,
-        colors: {},
-    };
+    const settings = getGallerySettings();
+    const currentTheme = normalizeThemeId(
+        stored.theme || settings.theme || "dark",
+        stored.themeRevision == null ? settings.themeRevision : stored.themeRevision
+    );
+    const baseTheme = getTheme(currentTheme);
+    const appearance = stored.appearance || {};
     const colors = { ...(appearance.colors || {}) };
     const content = document.createElement("div");
     const warning = document.createElement("div");
@@ -50,40 +56,55 @@ export function openAppearanceSettings(anchor) {
     themeLabel.textContent = "Base Theme";
     const themeSelect = document.createElement("select");
     themeSelect.style.cssText = "width:100%;margin:6px 0 12px;padding:6px;border-radius:8px;background:var(--usg-button-bg,#111);color:inherit;border:1px solid var(--usg-border,#455363);";
-    const currentTheme = stored.theme || getGallerySettings().theme || "dark";
-    getThemeNames().forEach((name) => {
+    themeChoices().forEach((choice) => {
         const option = document.createElement("option");
-        option.value = name;
-        option.textContent = name;
-        option.selected = name === currentTheme;
+        option.value = choice.id;
+        option.textContent = choice.label;
+        option.selected = choice.id === currentTheme;
         themeSelect.appendChild(option);
     });
 
     const opacityTitle = document.createElement("div");
     opacityTitle.textContent = "Opacity";
     opacityTitle.style.marginTop = "8px";
+    const shownOpacity = {
+        windowOpacity: appearance.windowOpacity ?? colorAlpha(baseTheme.panelBackground, 0.85),
+        panelOpacity: appearance.panelOpacity ?? colorAlpha(baseTheme.cardBackground, 0.92),
+        menuOpacity: appearance.menuOpacity ?? colorAlpha(baseTheme.settingsBackground, 0.85),
+    };
     const draft = {
         theme: currentTheme,
+        themeRevision: THEME_REVISION,
         appearance: {
-            windowOpacity: appearance.windowOpacity ?? 0.85,
-            panelOpacity: appearance.panelOpacity ?? 0.92,
-            menuOpacity: appearance.menuOpacity ?? 0.85,
+            windowOpacity: appearance.windowOpacity ?? null,
+            panelOpacity: appearance.panelOpacity ?? null,
+            menuOpacity: appearance.menuOpacity ?? null,
             colors,
         },
     };
-    const persist = async () => {
+    let persistTimer = null;
+    let persistGeneration = 0;
+    // Paint first. Saving is debounced and must not rebuild the gallery.
+    const applyLive = () => {
         warning.textContent = contrastWarning(draft.appearance.colors);
-        try {
-            await saveAppearance(draft);
-            updateGallerySettings({ theme: draft.theme });
-        } catch (err) {
-            warning.textContent = err.message || "Could not save appearance.";
-        }
+        previewAppearance(draft);
     };
-
-    themeSelect.onchange = () => {
-        draft.theme = themeSelect.value;
-        persist();
+    const persist = () => {
+        const generation = ++persistGeneration;
+        clearTimeout(persistTimer);
+        persistTimer = setTimeout(async () => {
+            try {
+                await saveAppearance(draft);
+                if (generation !== persistGeneration) return;
+                if (getGallerySettings().theme !== draft.theme) {
+                    updateGallerySettings({ theme: draft.theme, themeRevision: THEME_REVISION });
+                }
+            } catch (err) {
+                if (generation === persistGeneration) {
+                    warning.textContent = err.message || "Could not save appearance.";
+                }
+            }
+        }, 200);
     };
 
     const colorTitle = document.createElement("div");
@@ -101,6 +122,7 @@ export function openAppearanceSettings(anchor) {
         input.setAttribute("aria-label", label);
         input.oninput = () => {
             colors[key] = input.value;
+            applyLive();
             persist();
         };
         row.append(name, input);
@@ -113,6 +135,8 @@ export function openAppearanceSettings(anchor) {
     reset.style.cssText = "margin-top:14px;width:100%;padding:8px;border-radius:8px;cursor:pointer;background:var(--usg-button-bg,#263747);color:var(--usg-text,#fff);border:2px solid var(--usg-text,#fff);";
     reset.onclick = async () => {
         try {
+            clearTimeout(persistTimer);
+            persistGeneration += 1;
             await resetAppearance();
             menu.close();
         } catch (err) {
@@ -120,22 +144,45 @@ export function openAppearanceSettings(anchor) {
         }
     };
 
+    const windowSlider = slider("Window", shownOpacity.windowOpacity, (value) => {
+        draft.appearance.windowOpacity = value;
+        applyLive();
+        persist();
+    });
+    const panelSlider = slider("Panels", shownOpacity.panelOpacity, (value) => {
+        draft.appearance.panelOpacity = value;
+        applyLive();
+        persist();
+    });
+    const menuSlider = slider("Menus", shownOpacity.menuOpacity, (value) => {
+        draft.appearance.menuOpacity = value;
+        applyLive();
+        persist();
+    });
+    themeSelect.onchange = () => {
+        draft.theme = themeSelect.value;
+        const next = getTheme(draft.theme);
+        if (draft.appearance.windowOpacity == null) {
+            windowSlider.setValue(colorAlpha(next.panelBackground, 0.85));
+        }
+        if (draft.appearance.panelOpacity == null) {
+            panelSlider.setValue(colorAlpha(next.cardBackground, 0.92));
+        }
+        if (draft.appearance.menuOpacity == null) {
+            menuSlider.setValue(colorAlpha(next.settingsBackground, 0.85));
+        }
+        applyLive();
+        updateGallerySettings({ theme: draft.theme, themeRevision: THEME_REVISION });
+        persist();
+    };
+
     content.append(
         themeLabel,
         themeSelect,
         opacityTitle,
-        slider("Window", draft.appearance.windowOpacity, (value) => {
-            draft.appearance.windowOpacity = value;
-            persist();
-        }),
-        slider("Panels", draft.appearance.panelOpacity, (value) => {
-            draft.appearance.panelOpacity = value;
-            persist();
-        }),
-        slider("Menus", draft.appearance.menuOpacity, (value) => {
-            draft.appearance.menuOpacity = value;
-            persist();
-        }),
+        windowSlider,
+        panelSlider,
+        menuSlider,
         colorTitle,
         colorList,
         warning,

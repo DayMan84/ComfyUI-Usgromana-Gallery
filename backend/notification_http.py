@@ -29,6 +29,58 @@ COLOR_KEYS = (
     "star",
 )
 
+# Keep in sync with web/core/themes.js normalizeThemeId / THEME_REVISION.
+THEME_REVISION = 2
+CURRENT_THEMES = {
+    "dark",
+    "darkBlue",
+    "light",
+    "midnight",
+    "ocean",
+    "forest",
+    "rose",
+    "sand",
+}
+REMOVED_THEMES = {"darkHighContrast", "darkSubtle"}
+
+
+def normalize_theme(theme, revision=None) -> str:
+    """Map a stored theme onto one that still exists.
+
+    lightSubtle is the old id for Light. A legacy record whose theme is
+    "light" and which has no current themeRevision is the removed opaque
+    Light theme, so it falls back to Dark. Current clients send revision 2.
+    """
+    if not isinstance(theme, str):
+        return "dark"
+    name = theme.strip()
+    if name == "lightSubtle":
+        return "light"
+    try:
+        rev = int(revision) if revision is not None else 1
+    except (TypeError, ValueError):
+        rev = 1
+    if rev < THEME_REVISION and name == "light":
+        return "dark"
+    if name in REMOVED_THEMES:
+        return "dark"
+    if name in CURRENT_THEMES:
+        return name
+    return "dark"
+
+
+def migrate_stored_appearance(stored: dict | None) -> dict:
+    if not isinstance(stored, dict) or not stored:
+        return {}
+    theme = stored.get("theme")
+    if not isinstance(theme, str) or not theme.strip():
+        return stored
+    return {
+        **stored,
+        "theme": normalize_theme(theme, stored.get("themeRevision")),
+        "themeRevision": THEME_REVISION,
+    }
+
 
 def _flag(value, default: bool) -> bool:
     if value is None:
@@ -91,6 +143,7 @@ def clean_appearance(data: dict, previous: dict | None) -> dict:
     theme = data.get("theme", base.get("theme"))
     if theme is not None and not isinstance(theme, str):
         raise SocialError("INVALID_COMMENT", "Theme must be a theme name.", 400)
+    revision = data.get("themeRevision", base.get("themeRevision"))
     appearance = data.get("appearance", base.get("appearance") or {})
     if not isinstance(appearance, dict):
         raise SocialError("INVALID_COMMENT", "Appearance settings must be an object.", 400)
@@ -105,20 +158,22 @@ def clean_appearance(data: dict, previous: dict | None) -> dict:
         if color is None:
             raise SocialError("INVALID_COMMENT", f"{key} must be a #RRGGBB color.", 400)
         colors[key] = color
-    cleaned = {
-        "windowOpacity": _opacity(appearance.get("windowOpacity"), 0.85),
-        "panelOpacity": _opacity(appearance.get("panelOpacity"), 0.92),
-        "menuOpacity": _opacity(appearance.get("menuOpacity"), 0.85),
-        "colors": colors,
-    }
+    previous_appearance = base.get("appearance") if isinstance(base.get("appearance"), dict) else {}
+    cleaned = {"colors": colors}
+    for key in ("windowOpacity", "panelOpacity", "menuOpacity"):
+        if key in appearance and appearance.get(key) is not None:
+            cleaned[key] = _opacity(appearance.get(key), None)
+        elif previous_appearance.get(key) is not None:
+            cleaned[key] = _opacity(previous_appearance.get(key), None)
     result = {"appearance": cleaned}
     if isinstance(theme, str) and theme.strip():
-        result["theme"] = theme.strip()
+        result["theme"] = normalize_theme(theme, revision)
+        result["themeRevision"] = THEME_REVISION
     return result
 
 
 def appearance_payload(user_id: str) -> dict:
-    stored = social_store.get_appearance(user_id) or {}
+    stored = migrate_stored_appearance(social_store.get_appearance(user_id) or {})
     return {"ok": True, **stored}
 
 

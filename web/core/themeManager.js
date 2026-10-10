@@ -2,20 +2,14 @@
 // Manages theme application across all UI components
 
 import { getGallerySettings, subscribeGallerySettings } from "./gallerySettings.js";
-import { applyResolvedTheme, loadAppearance } from "./appearance.js";
+import { applyResolvedTheme, loadAppearance, subscribeAppearance } from "./appearance.js";
+import { getTheme, normalizeThemeId, THEME_REVISION } from "./themes.js";
 
 let currentTheme = null;
 let themeListeners = new Set();
 
-/**
- * Apply theme to all UI components
- */
-export function applyTheme(themeName = null) {
-    const settings = getGallerySettings();
-    const theme = applyResolvedTheme(themeName || settings.theme || "dark");
+function publish(theme) {
     currentTheme = theme;
-    
-    // Notify all listeners
     for (const listener of themeListeners) {
         try {
             listener(theme);
@@ -23,11 +17,19 @@ export function applyTheme(themeName = null) {
             console.warn("[UsgromanaGallery] Theme listener error:", err);
         }
     }
-    
-    // Also expose globally for components that need it
     if (typeof window !== "undefined") {
         window.USG_GALLERY_CURRENT_THEME = theme;
     }
+}
+
+/**
+ * Apply theme to all UI components that are already on screen.
+ * This paints the existing nodes. It does not rebuild the gallery.
+ */
+export function applyTheme(themeName = null) {
+    const settings = getGallerySettings();
+    const theme = applyResolvedTheme(themeName || settings.theme || "dark");
+    publish(theme);
 }
 
 /**
@@ -46,7 +48,6 @@ export function getCurrentTheme() {
  */
 export function subscribeTheme(fn) {
     themeListeners.add(fn);
-    // Immediately call with current theme
     if (currentTheme) {
         try {
             fn(currentTheme);
@@ -61,20 +62,32 @@ export function subscribeTheme(fn) {
  * Initialize theme system
  */
 export function initThemeSystem() {
-    // Apply initial theme
+    subscribeAppearance((theme) => {
+        publish(theme);
+    });
+
     applyTheme();
     loadAppearance();
-    
-    // Subscribe to settings changes to update theme
+
+    const initial = getGallerySettings();
+    let appliedId = normalizeThemeId(
+        initial.theme || "dark",
+        initial.themeRevision == null ? THEME_REVISION : initial.themeRevision
+    );
+    // Only a new base theme id repaints from settings. Opacity, custom
+    // colors, and button scale must not come through here: those paint
+    // themselves and a settings broadcast used to rebuild the gallery.
     subscribeGallerySettings((settings) => {
-        if (settings.theme) {
-            applyTheme(settings.theme);
-        }
+        const id = normalizeThemeId(
+            settings.theme || "dark",
+            settings.themeRevision == null ? THEME_REVISION : settings.themeRevision
+        );
+        if (id === appliedId) return;
+        appliedId = id;
+        applyTheme(id);
     });
-    
-    // Expose global function for theme updates
+
     if (typeof window !== "undefined") {
         window.USG_GALLERY_APPLY_THEME = applyTheme;
     }
 }
-

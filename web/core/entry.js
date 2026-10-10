@@ -15,7 +15,7 @@ import {
 import { initDragDrop } from "./dragDrop.js";
 import { initThemeSystem } from "./themeManager.js";
 import { startNotificationPolling } from "./notifications.js";
-import { loadAppearance } from "./appearance.js";
+import { themeUsesLightLogo } from "./themes.js";
 import {
     applyGalleryButtonScale,
     applyPinwheelScale,
@@ -315,7 +315,7 @@ function ensureToolbarButton(toolbar, settings) {
     const icon = toolbarBtn.querySelector("img");
     if (icon) {
         const theme = (settings || getGallerySettings()).theme;
-        icon.src = theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        icon.src = themeUsesLightLogo(theme) ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
     }
     if (toolbarBtn.parentElement !== toolbar) {
         const managerButton = toolbar.querySelector('button[aria-label="ComfyUI Manager"], button[title="ComfyUI Manager"]');
@@ -466,7 +466,7 @@ function createFloatingButton() {
     iconImg.style.transition = "opacity 0.2s ease";
 
     const settings = getGallerySettings();
-    iconImg.src = settings.theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+    iconImg.src = themeUsesLightLogo(settings.theme) ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
 
     const labelSpan = document.createElement("span");
     labelSpan.textContent = "Gallery";
@@ -535,11 +535,24 @@ function createFloatingButton() {
     applyButtonPosition(settings);
     watchPinwheelScale();
 
-    // React to settings changes: theme + anchoring
+    // Theme and anchor changes reposition. Button scale only resizes the
+    // existing control so dragging the slider does not rebuild the gallery.
+    let seenSettings = null;
     const unsubscribeSettings = subscribeGallerySettings((newSettings) => {
-        iconImg.src =
-            newSettings.theme === "light" ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
-        applyButtonPosition(newSettings);
+        const prev = seenSettings;
+        seenSettings = newSettings;
+        const nextLogo = themeUsesLightLogo(newSettings.theme) ? ASSETS.LIGHT_LOGO : ASSETS.DARK_LOGO;
+        if (iconImg.getAttribute("src") !== nextLogo) iconImg.src = nextLogo;
+        const anchorChanged = !prev
+            || prev.anchorToManagerBar !== newSettings.anchorToManagerBar
+            || prev.openButtonBoxQuery !== newSettings.openButtonBoxQuery;
+        if (anchorChanged) {
+            applyButtonPosition(newSettings);
+            return;
+        }
+        if (prev.galleryButtonScale !== newSettings.galleryButtonScale) {
+            applyPillMetrics(launchBtn, newSettings);
+        }
     });
 
     // Cleanup on button removal (if needed)
@@ -609,7 +622,6 @@ export async function initGalleryExtension() {
     // Initialize drag and drop functionality
     initDragDrop();
     startNotificationPolling();
-    loadAppearance();
 
     // Keep button alive even if Vue re-renders the actionbar
     startAnchorWatch();
